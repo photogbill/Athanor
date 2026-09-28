@@ -12,8 +12,7 @@ Qt widgets — and it is built to be put inside other programs. The
 experimental Model Lab workspace, but nothing in Athanor needs ATK.
 
 *An athanor was the alchemist's slow furnace, built to hold one steady heat
-for days so that long, patient work could go on inside it. Named by Bill and
-Claude together, 2026-09-27.*
+for days so that long, patient work could go on inside it.*
 
 **Status: design only.** The plan is [ATHANOR_PLAN.md](ATHANOR_PLAN.md) — the
 tabs, the Mad Science Wing, the order they are built in, and the decisions
