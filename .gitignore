@@ -1,0 +1,36 @@
+# Athanor keeps everything it records on the local machine.
+# None of it belongs in a repository.
+
+# Recordings, notebooks, results, caches
+*.athrec-meta
+*.athrec-data
+# (anchored to the repo root, so tests/data/ reference files are kept)
+/data/
+/results/
+/recordings/
+/notebook/
+/cache/
+.cache/
+
+# Models never ship with Athanor — bring your own
+*.gguf
+# …except llama.cpp's vocabulary-only test files (no weights; see their README)
+!tests/data/vocab/*.gguf
+*.safetensors
+*.bin
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+
+# Editors and OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

@@ -1,0 +1,4 @@
+# Windows batch files must keep CRLF or cmd.exe cannot find their labels
+*.bat text eol=crlf
+# vocab-only test files and any other GGUF are binary
+*.gguf binary
