@@ -2,6 +2,7 @@
 runs here, and every `athanor <command>` the docs mention exists."""
 
 import contextlib
+import os
 import io
 import re
 import unittest
@@ -9,7 +10,7 @@ from pathlib import Path
 
 from athanor import log
 from athanor.host import reset_host
-from fixtures import HAVE_LLAMA, TempDir, VOCABS
+from fixtures import HAVE_LLAMA, TempDir, VOCABS, tiny_runnable_model
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = [ROOT / "docs" / "INTEGRATING.md", ROOT / "docs" / "QUICKSTART.md", ROOT / "README.md"]
@@ -31,9 +32,17 @@ class TheGuideRuns(unittest.TestCase):
             for i, code in enumerate(blocks(doc)):
                 if code.lstrip().startswith("# needs: llama") and not HAVE_LLAMA:
                     continue
+                if code.lstrip().startswith("# needs: qt"):
+                    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+                    try:
+                        import PySide6.QtWidgets  # noqa: F401
+                    except Exception:
+                        continue
                 with self.subTest(doc=doc.name, block=i), TempDir() as d:
                     ns = {"MODEL": str(VOCABS["phi-3"]), "MODEL_B": str(VOCABS["llama-spm"]),
                           "DATA_DIR": d, "__name__": "__docs__"}
+                    if "RUNNABLE_MODEL" in code:   # a model with weights, written for the block
+                        ns["RUNNABLE_MODEL"] = str(tiny_runnable_model(d / "runnable.gguf"))
                     try:
                         with contextlib.redirect_stdout(io.StringIO()):
                             exec(compile(code, f"{doc.name}[{i}]", "exec"), ns)

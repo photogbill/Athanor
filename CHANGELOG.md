@@ -3,6 +3,106 @@
 Until 1.0, anything in the public API, the command line or the result
 formats may change. Every change is listed here.
 
+## 0.3.0 — 2026-09-29 — the Tap (spike S1)
+
+- **The Tap** (`athanor.tap`, `api.make_tappable`): a model's own tensors,
+  copied out while llama.cpp computes them — each layer's output
+  (`l_out-N`), the final norm, the logits, and a mixture-of-experts model's
+  routing (`ffn_moe_topk-N`, `ffn_moe_weights-N`, `ffn_moe_probs-N`). It
+  uses llama.cpp's evaluation callback (`cb_eval`) and five of ggml's
+  functions, bound here (the binding binds none); the start of
+  `struct ggml_tensor` is read directly and checked by a self-test at load,
+  so a ggml that moved a field turns the Tap off with a reason instead of
+  reading the wrong bytes. `make_tappable` rebuilds a `Llama`'s context once
+  with the dispatcher in it (weights shared, the cache empty); `capture`,
+  `watching` and `tensor_names` read it. A failure inside the Tap is kept
+  and never reaches llama.cpp.
+- **Proved on the test models (CPU)**: tapped and untapped logits
+  bit-identical, idle and while copying; the Tap's copy of `result_output`
+  IS llama.cpp's logits; the last layer's output, normed and multiplied by
+  the output matrix in Athanor, reproduces them (the logit lens); each
+  layer's chosen experts are the router's top-scoring ones, their weights
+  the router's values.
+- **`athanor tap probe MODEL`** (`api.tap_probe`): all of that, measured on
+  the machine it runs on — exactness plain vs tapped, the lens, the expert
+  check, and milliseconds per token plain, tapped-idle and copying each
+  preset. `athanor tap names MODEL` lists what one forward pass computes.
+- **The Tap in recordings**: `attach(llm, tap="experts")` (or `"residual"`,
+  `"logits"`, patterns), `athanor record --tap …`. A third file,
+  `.athrec-tap`, one fixed-size record per token, aligned with the
+  Waterfall's steps and described by the meta file's `tap` block
+  (`docs/formats/recording.md`). `Recording.tap` reads it;
+  `.experts()` gives the routing (`ids`, `weights`, `probs`, `share()`,
+  `usage()`, `grid()`). A model that was not made tappable is recorded
+  without, and the recording says why.
+- **The expert map** (M28) in the player: layers × experts at the cursor
+  (the router's score in dB, the experts used framed with how much each
+  counted), how often each was used over the reply, its thinking or its
+  answer, and one layer over time — a second waterfall that scrolls with
+  the cursor. `ExpertPanel` / `ExpertMap` on their own.
+- **`tiny_model(n_experts=…)`** writes a mixture-of-experts test model.
+- `capabilities`: `eval_callback` is now available when the Tap will run.
+- ATK: the Model Lab's "also record which experts the model uses" box.
+
+### Fixed before release, from an independent review
+
+- A context that could not be rebuilt (both the tapped one and the plain
+  fallback refused, e.g. the memory taken in the gap) left the `Llama`
+  holding a freed context, and the next generation crashed the process. It
+  now holds a stand-in that raises `TapUnavailable` ("reload the model").
+- A batch longer than `n_ubatch` runs the graph once per micro-batch; the
+  Tap kept only the tensors whose row count matched the whole batch, so
+  every layer but the last was dropped and the recording's layout fixed
+  without them. Each micro-batch is now recognised (by the graph's first
+  node) and its rows stitched back into batch order.
+- The token axis was guessed from a tensor's name, wrong for 3-D tensors
+  such as `Qcur` after its reshape. It now comes from the shape against the
+  micro-batch's token and output counts, with llama.cpp's known layouts as
+  the tie-breaker; a name llama.cpp gives to several nodes keeps the first,
+  and says so.
+- The expert map threw on a step whose weights were unknown (NaN) when no
+  router scores were recorded; such cells now draw, and say the share is
+  unknown.
+- An error inside `attach` after the Tap was attached could leave its
+  session and decode wrapper on the model; the Tap is now set up inside the
+  block that always cleans up.
+- A Tap error mid-recording marked later steps "nothing captured"; they are
+  now marked "stopped", with the error and the step it stopped at.
+- The player read a recording's whole Tap file to list what it held; it
+  now reads the meta file's layout, and the Tap file only for the experts.
+- The probe's lens check could pair a layer's rows with the wrong step's
+  logits when a row was missing.
+
+## 0.2.0 — 2026-09-29 — the Waterfall
+
+- **The recorder** (`athanor.waterfall`, `api.attach_recorder`): every token
+  a `llama_cpp.Llama` samples, recorded with the distribution it was chosen
+  from — the k most probable tokens (256 by default), the probability left
+  over, the entropy, the token taken with its exact rank and probability,
+  and the time. It reads llama.cpp's own logits after the sampler has
+  picked, so a recorded reply is the same reply, token for token (tested
+  against an unrecorded run with the same seed). A failure costs the
+  recording, never the reply. One reply carried on in several parts is one
+  recording (`recorder=`).
+- **The format**, `.athrec-meta` + `.athrec-data`: SigMF-shaped, fixed-size
+  records, readable with numpy alone (`docs/formats/recording.md`).
+- **The player** (`athanor.gui`, PySide6, optional): the reply along the top
+  (the token at the cursor lit, the rest dimmed or hidden, the words the
+  model was unsure of underlined, hover for how sure); the waterfall (time
+  down, candidates across, probability in dB, entropy beside it); **taken**
+  — the token the model actually wrote, on every row, whatever its rank;
+  **Aa read**, which writes each candidate in its cell; and the transport,
+  with ◆ to jump between **moments of doubt** (`Recording.doubts()`).
+  `WaterfallPanel` is the whole tab as one widget; `python -m athanor.gui`
+  opens it in a window.
+- **Command line**: `athanor record` (load, generate once, record) and
+  `athanor recording` (summarise one).
+- **`api.tiny_model(path)`**: a llama-architecture GGUF with random weights,
+  written on the spot, that llama.cpp really runs — so a host can test its
+  integration without downloading a model. Nothing ships with a model.
+- ATK is the first host: Chat's **⚗ record** box, and the Model Lab's
+  Waterfall tab.
+
 ## 0.1.0 — 2026-09-28 — Phase 1: the file
 
 First release. Everything here reads files and tokenizers; no weights are

@@ -348,6 +348,230 @@ def cmd_notebook(args):
     return EXIT_OK
 
 
+def _human_recording(r):
+    m = r.get("model") or {}
+    t = r.get("timing") or {}
+    print(f"{r['path']}")
+    print(f"  model: {m.get('name') or m.get('path') or '?'}")
+    tps = t.get("tokens_per_second")
+    ovh = t.get("overhead_ms_per_step")
+    print(f"  {r['n_steps']} tokens, finish: {r.get('finish_reason')}"
+          + (f", {tps:.1f} tokens/s" if tps else "")
+          + (f", recorder {ovh:.2f} ms/token" if ovh is not None else ""))
+    if r.get("mean_entropy_bits") is not None:
+        print(f"  mean entropy {r['mean_entropy_bits']:.2f} bits; the model's favourite was "
+              f"NOT chosen at {r['not_the_favourite']} of {r['n_steps']} tokens")
+    if r.get("error"):
+        print(f"  ! {r['error']}")
+    tap = r.get("tap")
+    if tap:
+        if tap.get("recorded"):
+            ovh = tap.get("overhead_ms_per_step")
+            print(f"  the Tap recorded {', '.join(tap['recorded'])} beside every token"
+                  + (f" ({ovh:.2f} ms/token)" if ovh is not None else ""))
+        for key in ("unavailable", "error"):
+            if tap.get(key):
+                print(f"  ! the Tap: {tap[key]}")
+        if tap.get("stopped_at") is not None:
+            print(f"  ! the Tap stopped at step {tap['stopped_at']}")
+    text = r.get("text") or ""
+    print("\n" + (text if len(text) <= 2000 else text[:2000] + " …"))
+    forks = r.get("forks")
+    if forks:
+        print("\nwhere the sampler did not take the favourite:")
+        for f in forks:
+            print(f"  step {f['step']:5d}  took {f['chosen']!r} ({100 * f['p']:.1f}%, rank "
+                  f"{f['rank']})  over {f['favourite']!r} ({100 * f['favourite_p']:.1f}%)")
+    step = r.get("step")
+    if step:
+        print(f"\nstep {step['step']}: chose {step['piece']!r} — rank {step['rank']}, "
+              f"p {100 * (step['p'] or 0):.2f}%, entropy {step['entropy_bits']:.2f} bits")
+        for c in r.get("candidates", []):
+            mark = "▶" if c["chosen"] else " "
+            print(f"   {mark} {100 * c['p']:7.3f}%  {c['piece']!r}  (id {c['id']})")
+
+
+def _human_recordings(rows):
+    for r in rows:
+        err = f"  ! {r['error']}" if r.get("error") else ""
+        print(f"  {r.get('started') or r.get('created') or '?':27s} {str(r.get('model')):40s} "
+              f"{str(r.get('n_steps')):>6s} tokens{err}")
+        print(f"      {r['path']}")
+    print(f"\n{len(rows)} recordings")
+
+
+def cmd_record(args):
+    from .waterfall.run import record_once
+    messages = prompt = None
+    if args.raw:
+        if args.messages or args.system:
+            raise ValueError("--raw sends --prompt as it is; it takes no --messages or --system")
+        if not args.prompt:
+            raise ValueError("--raw needs --prompt")
+        prompt = args.prompt
+    elif args.messages:
+        if args.prompt or args.system:
+            raise ValueError("give --messages, or --prompt (with --system), not both")
+        with open(args.messages, encoding="utf-8-sig") as f:
+            messages = json.load(f)
+        if not isinstance(messages, list) or not all(
+                isinstance(m, dict) and "role" in m and "content" in m for m in messages):
+            raise ValueError(f"{args.messages}: expected a JSON list of {{role, content}}")
+    else:
+        if not args.prompt:
+            raise ValueError("record needs --prompt, or --messages FILE")
+        messages = ([{"role": "system", "content": args.system}] if args.system else []) + [
+            {"role": "user", "content": args.prompt}]
+    r = record_once(args.model, messages=messages, prompt=prompt, max_tokens=args.max_tokens,
+                    temperature=args.temperature, top_k=args.top_k, top_p=args.top_p,
+                    min_p=args.min_p, repeat_penalty=args.repeat_penalty, seed=args.seed,
+                    n_ctx=args.n_ctx, gpu_layers=args.gpu_layers, k=args.k, folder=args.out,
+                    tap=args.tap or None)
+    r["kind"] = "record"
+    _out(args, r, _human_recording)
+    return EXIT_OK
+
+
+def _human_probe(r):
+    m = r.get("model") or {}
+    print(f"{r.get('model_path')}")
+    print(f"  {m.get('arch')}, {m.get('n_layer')} layers, {m.get('n_embd')} wide"
+          + (f", {m['n_expert']} experts ({m.get('n_expert_used')} used per token)"
+             if m.get("n_expert") else "")
+          + f"; GPU offload in this build: {r.get('gpu_offload')}")
+    print(f"  {r.get('prompt_tokens')} prompt tokens, {r.get('generated_tokens')} generated, "
+          f"{r.get('asks_per_token', 0):.0f} graph nodes asked about per token")
+    print("\n  ms per generated token:")
+    oh = r.get("overhead_percent") or {}
+    for k, v in (r.get("ms_per_token") or {}).items():
+        print(f"    {k:14s} {v:9.3f}" + (f"   {oh[k]:+.1f}%" if k in oh else ""))
+    print("\n  exactness (largest logit difference against the plain context; 0 = identical):")
+    for k, v in (r.get("exactness") or {}).items():
+        print(f"    {k:32s} {v}")
+    print(f"    result_output (the Tap's copy) vs logits: {r.get('result_output_vs_logits_max_abs')}")
+    lens = r.get("lens") or {}
+    if lens.get("checked"):
+        print(f"\n  logit lens: {'reproduces' if lens.get('reproduces') else 'does NOT reproduce'} "
+              f"llama.cpp's logits (largest error {lens['logit_max_error_top16']:.3g} on values "
+              f"up to {lens['logit_scale']:.3g}; final norm error {lens['rms_norm_max_error']:.3g})")
+    else:
+        print(f"\n  logit lens: not checked — {lens.get('why')}")
+    ex = r.get("experts")
+    if ex:
+        print(f"  experts: {ex['chosen_not_router_top']} of {ex['layer_steps_checked']} layer-steps "
+              "chose experts other than the router's top-scoring ones")
+    for label, c in (r.get("copied") or {}).items():
+        extra = f"  ! {c['error']}" if c.get("error") else ""
+        print(f"  copied for {label}: {c['tensors_per_token']:.0f} tensors, "
+              f"{c['bytes_per_token'] / 1024:.1f} KB, {c['copy_ms_per_token']:.3f} ms per token{extra}")
+        for n in c.get("notes") or []:
+            print(f"    · {n}")
+    print(f"\n  {r.get('verdict')}")
+
+
+def _human_names(r):
+    for k, layers in r["kinds"].items():
+        print(f"  {k:32s} {('layers ' + layers) if layers else ''}")
+    print(f"\n{r['nodes']} tensors in one forward pass of {r['model_path']}; "
+          "tap any of them by name (e.g. --tap 'l_out-*')")
+
+
+def _layer_ranges(layers: list) -> str:
+    out, start, prev = [], None, None
+    for x in sorted(layers):
+        if start is None:
+            start = prev = x
+        elif x == prev + 1:
+            prev = x
+        else:
+            out.append(f"{start}" if start == prev else f"{start}–{prev}")
+            start = prev = x
+    if start is not None:
+        out.append(f"{start}" if start == prev else f"{start}–{prev}")
+    return ", ".join(out)
+
+
+def cmd_tap(args):
+    from .tap import make_tappable, split_name, tensor_names
+    from .tap.probe import probe
+    from .waterfall.run import load_model
+    llm = load_model(args.model, n_ctx=args.n_ctx, gpu_layers=args.gpu_layers)
+    try:
+        if args.action == "probe":
+            from .util import file_identity
+            r = probe(llm, tokens=args.tokens)
+            try:
+                r["file"] = file_identity(args.model)
+            except OSError:
+                pass
+        else:
+            args.record = False
+            make_tappable(llm)
+            names = tensor_names(llm)
+            kinds: dict = {}
+            unnamed = 0
+            for n in names:
+                base, _sp, note = n.partition(" (")
+                if base.startswith("node_") and base[5:].isdigit():
+                    unnamed += 1
+                    continue
+                k, layer = split_name(base)
+                k = f"{k} ({note}" if note else k
+                kinds.setdefault(k, [])
+                if layer is not None:
+                    kinds[k].append(layer)
+            if unnamed:
+                kinds[f"(unnamed nodes: {unnamed})"] = []
+            r = {"kind": "tap-names", "model_path": str(args.model), "nodes": len(names),
+                 "names": names,
+                 "kinds": {k: _layer_ranges(v) for k, v in kinds.items()}}
+    finally:
+        try:
+            llm.close()
+        except Exception:
+            pass
+    _out(args, r, _human_probe if args.action == "probe" else _human_names)
+    return EXIT_OK
+
+
+def _forks(rec, limit: int) -> list:
+    import math
+    out = []
+    for i in range(rec.n_steps):
+        row = rec.steps[i]
+        if int(row["rank"]) > 0:
+            fav = int(row["ids"][0])
+            out.append({"step": i, "chosen": rec.piece(int(row["chosen"])),
+                        "p": math.exp(float(row["logprob"])), "rank": int(row["rank"]),
+                        "favourite": rec.piece(fav),
+                        "favourite_p": math.exp(float(row["logprobs"][0]))})
+            if len(out) >= limit:
+                break
+    return out
+
+
+def cmd_recording(args):
+    from .waterfall import read
+    args.record = False
+    rec = read(args.path, verify=args.verify)
+    r = rec.summary()
+    r["forks"] = _forks(rec, args.forks)
+    if args.step is not None:
+        if not 0 <= args.step < rec.n_steps:
+            raise ValueError(f"step {args.step} is outside 0–{rec.n_steps - 1}")
+        r["step"] = rec.chosen(args.step)
+        r["candidates"] = rec.candidates(args.step, args.top)
+    _out(args, r, _human_recording)
+    return EXIT_OK
+
+
+def cmd_recordings(args):
+    from .waterfall import default_folder, list_recordings
+    args.record = False
+    _out(args, list_recordings(args.folder or default_folder()), _human_recordings)
+    return EXIT_OK
+
+
 # ---------------------------------------------------------------- parser
 def build_parser() -> argparse.ArgumentParser:
     # NOTE: never set_defaults(record=...) on a subparser — the parent's
@@ -428,6 +652,53 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--kind", help="only runs of this kind (list)")
     s.add_argument("--path", help="a notebook file other than the default")
     s.set_defaults(func=cmd_notebook)
+
+    s = sub.add_parser("record", parents=[common],
+                       help="the Waterfall: generate once and record every token's choices")
+    s.add_argument("model")
+    s.add_argument("--prompt", help="the user's message (or, with --raw, the whole prompt)")
+    s.add_argument("--system", help="a system message before --prompt")
+    s.add_argument("--messages", help="a JSON file: [{\"role\":…, \"content\":…}, …]")
+    s.add_argument("--raw", action="store_true", help="send --prompt as raw text, no template")
+    s.add_argument("--max-tokens", type=int, default=256)
+    s.add_argument("--temperature", type=float, default=0.8)
+    s.add_argument("--top-k", type=int)
+    s.add_argument("--top-p", type=float)
+    s.add_argument("--min-p", type=float)
+    s.add_argument("--repeat-penalty", type=float)
+    s.add_argument("--seed", type=int)
+    s.add_argument("--n-ctx", type=int, default=4096)
+    s.add_argument("--gpu-layers", type=int,
+                   help="layers on the GPU (default: all, if this build can offload)")
+    s.add_argument("--k", type=int, default=256, help="candidates kept per token (default 256)")
+    s.add_argument("--out", help="folder for the recording (default: <data>/recordings)")
+    s.add_argument("--tap", action="append",
+                   help="also record the model's insides: 'experts', 'residual', 'logits', or "
+                        "tensor-name patterns such as 'l_out-*' (repeatable)")
+    s.set_defaults(func=cmd_record)
+
+    s = sub.add_parser("tap", parents=[common],
+                       help="the Tap (spike S1): probe what it costs here, or list what it can read")
+    s.add_argument("action", choices=["probe", "names"])
+    s.add_argument("model")
+    s.add_argument("--tokens", type=int, default=32, help="tokens generated per run (probe)")
+    s.add_argument("--n-ctx", type=int, default=1024)
+    s.add_argument("--gpu-layers", type=int,
+                   help="layers on the GPU (default: all, if this build can offload)")
+    s.set_defaults(func=cmd_tap)
+
+    s = sub.add_parser("recording", parents=[common], help="read a Waterfall recording")
+    s.add_argument("path", help="the .athrec-meta file (or its stem)")
+    s.add_argument("--step", type=int, help="show the candidates at this step")
+    s.add_argument("--top", type=int, default=20, help="candidates shown with --step")
+    s.add_argument("--forks", type=int, default=40,
+                   help="list up to N steps where the favourite was not taken")
+    s.add_argument("--verify", action="store_true", help="check the data file's SHA-256")
+    s.set_defaults(func=cmd_recording)
+
+    s = sub.add_parser("recordings", parents=[common], help="list Waterfall recordings")
+    s.add_argument("folder", nargs="?", help="default: <data>/recordings")
+    s.set_defaults(func=cmd_recordings)
     return p
 
 
@@ -448,9 +719,12 @@ def _utf8_streams() -> None:
                 pass
 
 
+_TEXT_FLAGS = ("--text", "--prompt", "--system")
+
+
 def redact_argv(argv: list) -> list:
     """The arguments as the log keeps them: text the user typed (``--text``,
-    a notebook note) is replaced by its length and a hash — the log records
+    ``--prompt``, ``--system``, a notebook note) is replaced by its length and a hash — the log records
     WHAT was run, not the material. Paths are kept."""
     import hashlib
 
@@ -464,11 +738,12 @@ def redact_argv(argv: list) -> list:
         if skip:
             out.append(mask(a))
             skip = False
-        elif a == "--text":
+        elif a in _TEXT_FLAGS:
             out.append(a)
             skip = True
-        elif a.startswith("--text="):
-            out.append("--text=" + mask(a[len("--text="):]))
+        elif a.split("=", 1)[0] in _TEXT_FLAGS and "=" in a:
+            flag, value = a.split("=", 1)
+            out.append(flag + "=" + mask(value))
         elif note and i >= 3 and not a.startswith("--"):
             out.append(mask(a))
         else:
@@ -489,7 +764,10 @@ def main(argv=None) -> int:
         parser.error(f"notebook {args.action} needs a run id")
     from .gguf import GGUFError
     from .util import versions
-    from .vocab import LlamaUnavailable, VocabLoadError
+    from .vocab import LlamaUnavailable, ModelLoadError
+    from .tap import TapUnavailable
+    from .waterfall.attach import RecorderUnavailable
+    from .waterfall.fileformat import RecordingError
     if argv is None:           # a real process, not a call from Python
         log.enable_crash_log()
     started = time.perf_counter()
@@ -508,12 +786,12 @@ def main(argv=None) -> int:
 
     try:
         code = args.func(args)
-    except (FileNotFoundError, IsADirectoryError, GGUFError) as exc:
+    except (FileNotFoundError, IsADirectoryError, GGUFError, RecordingError) as exc:
         code = fail(exc, EXIT_INPUT, "cli-input-error")
-    except LlamaUnavailable as exc:
+    except (LlamaUnavailable, RecorderUnavailable, TapUnavailable) as exc:
         code = fail(exc, EXIT_LLAMA, "cli-no-llama")
-    except VocabLoadError as exc:
-        code = fail(exc, EXIT_INPUT, "cli-vocab-load-error")
+    except ModelLoadError as exc:
+        code = fail(exc, EXIT_INPUT, "cli-model-load-error")
     except (UnicodeError, OSError) as exc:
         code = fail(exc, EXIT_ERROR, "cli-error")
     except ValueError as exc:

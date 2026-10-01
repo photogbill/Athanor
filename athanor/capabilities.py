@@ -27,7 +27,7 @@ FEATURES = {
         "cross-checking Template's renders against llama.cpp's own formatter"),
     "logits": (
         ("llama_batch_init", "llama_decode", "llama_get_logits_ith"),
-        "Next Token, the Waterfall, Surprise (Phase 2)"),
+        "Next Token, Surprise (Phase 2); the Waterfall's recorder reads them"),
     "state": (
         ("llama_state_seq_get_size", "llama_state_seq_get_data", "llama_state_seq_set_data"),
         "the Waterfall's branching (Phase 2)"),
@@ -80,6 +80,9 @@ def probe() -> dict:
         out["features"]["eval_callback"] = {
             "available": False, "used_by": "the Tap (spike S1)",
             "why": "llama-cpp-python is not importable"}
+        out["features"]["recording"] = {
+            "available": False, "used_by": "the Waterfall's recorder",
+            "why": "llama-cpp-python is not importable"}
         return out
 
     out["binding"] = {"installed": True, "error": None,
@@ -106,14 +109,22 @@ def probe() -> dict:
             "available": False, "used_by": FEATURES["vocab"][1],
             "why": "llama_model_params has no vocab_only field in this binding"}
 
-    cp = _context_param_fields(lc)
+    from .waterfall.attach import check_binding
+    why = check_binding()
+    out["features"]["recording"] = {
+        "available": why is None,
+        "used_by": "the Waterfall's recorder (athanor.waterfall.attach, athanor record)"}
+    if why:
+        out["features"]["recording"]["why"] = why
+
+    from .tap import check_tap
+    why = check_tap()
     out["features"]["eval_callback"] = {
-        "available": False,
-        "used_by": "the Tap — the logit lens, attention maps, M1–M3, M9, M16, M20 (spike S1)",
-        "why": ("the context parameters carry cb_eval, but reading a tensor needs ggml's "
-                "backend functions, which this binding does not bind; spike S1 binds them")
-        if "cb_eval" in cp else "llama_context_params has no cb_eval field in this binding",
-    }
+        "available": why is None,
+        "used_by": ("the Tap (athanor.tap, athanor record --tap): the expert map, the logit "
+                    "lens, attention maps — M1–M3, M9, M16, M20, M28–M34")}
+    if why:
+        out["features"]["eval_callback"]["why"] = why
     return out
 
 

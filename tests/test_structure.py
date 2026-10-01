@@ -55,6 +55,13 @@ class Standalone(unittest.TestCase):
                 if isinstance(n, ast.ImportFrom)]
         self.assertIn("atk", mods)
 
+    def test_the_widgets_import_no_host_either(self):
+        gui = sorted((PKG / "gui").rglob("*.py"))
+        self.assertGreaterEqual(len(gui), 3)
+        bad = [(p.relative_to(ROOT).as_posix(), mod) for p in gui
+               for mod, _ in imports_of(p) if mod in FORBIDDEN_ROOTS]
+        self.assertEqual(bad, [])
+
     def test_the_engine_has_no_qt(self):
         bad = [(p.relative_to(ROOT).as_posix(), mod) for p in engine_files()
                for mod, _ in imports_of(p) if mod in QT_ROOTS]

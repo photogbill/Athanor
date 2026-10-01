@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "athanor"
 dynamic = ["version"]
-description = "Take a language model apart and measure it: GGUF files, their tokenizers and chat templates, through llama.cpp itself."
+description = "Take a language model apart and measure it: GGUF files, their tokenizers and chat templates, a recorded waterfall of every token it chooses, and a tap on its insides (the expert map, the residual stream) — through llama.cpp itself."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [{name = "William R. Duncan"}]
-keywords = ["llm", "gguf", "llama.cpp", "tokenizer", "interpretability"]
+keywords = ["llm", "gguf", "llama.cpp", "tokenizer", "interpretability", "mixture-of-experts"]
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -29,12 +29,17 @@ llama = ["llama-cpp-python>=0.3.16"]
 # gguf-py (llama.cpp's own, MIT): decodes K-quant and i-quant rows for
 # Compare's lineage check. Everything else works without it.
 quants = ["gguf>=0.10"]
+# The Qt widgets (athanor.gui): the Waterfall player. The engine never needs it.
+gui = ["PySide6>=6.5"]
 
 [project.urls]
 Homepage = "https://github.com/photogbill/Athanor"
 
 [project.scripts]
 athanor = "athanor.cli:main"
+
+[project.gui-scripts]
+athanor-waterfall = "athanor.gui.__main__:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "athanor.__version__"}

@@ -10,7 +10,8 @@ Every function returns plain data — dicts, lists, strings, numbers — that
 every figure labelled MEASURED, DECLARED, ESTIMATE or EXPERIMENTAL. No Qt,
 no global state beyond the host (``set_host``). Nothing is written except
 Athanor's own log (``athanor.log``; ``ATHANOR_LOG=0`` turns it off) and
-what you ask for (``record``).
+what you ask for (``record`` to the notebook; a Waterfall recording's
+``save``).
 
     from athanor import api
     report = api.inspect("model.gguf")
@@ -36,9 +37,18 @@ from .templates import SAMPLE_CONVERSATION, detect as detect_template
 from .templates import render as render_template, resolve as resolve_template
 from . import log
 from .util import dumps, file_identity
-from .vocab import LlamaUnavailable, Vocab, VocabLoadError
+from .vocab import LlamaUnavailable, ModelLoadError, Vocab, VocabLoadError
+from .waterfall import Recorder, RecorderUnavailable, Recording, RecordingError
+from .waterfall import attach as attach_recorder, check_binding as recorder_check
+from .waterfall import default_folder as recordings_folder, list_recordings
+from .waterfall import read as read_recording
+from .waterfall.run import load_model, record_once
+from .testing import tiny_model
+from . import tap
+from .tap import TapUnavailable, make_tappable
+from .tap.probe import probe as tap_probe
 
-API_VERSION = "0.1"
+API_VERSION = "0.2"
 
 __all__ = [
     "API_VERSION", "VERSION",
@@ -55,7 +65,15 @@ __all__ = [
     "template", "template_compare", "template_library",
     "render_template", "resolve_template", "detect_template", "SAMPLE_CONVERSATION",
     # the tokenizer itself
-    "Vocab", "LlamaUnavailable", "VocabLoadError",
+    "Vocab", "LlamaUnavailable", "VocabLoadError", "ModelLoadError",
+    # the Waterfall
+    "attach_recorder", "recorder_check", "Recorder", "RecorderUnavailable", "record_once",
+    "load_model", "read_recording", "Recording", "RecordingError", "list_recordings",
+    "recordings_folder",
+    # the Tap
+    "tap", "make_tappable", "tap_probe", "TapUnavailable",
+    # testing a host without downloading a model
+    "tiny_model",
     # the record, and the log
     "Notebook", "record", "dumps", "log",
 ]
@@ -69,6 +87,7 @@ _QUESTIONS = {
     "overlap": "Which models share a vocabulary?",
     "template": "What does the model actually see?",
     "template-compare": "How do these two templates differ?",
+    "tap-probe": "Does the Tap work here, what does it cost, and does it change anything?",
 }
 
 

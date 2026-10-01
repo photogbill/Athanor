@@ -34,7 +34,36 @@ python -m athanor template mistral-v7-tekken --model my-model.gguf
 python -m athanor template gguf --vs chatml --model my-model.gguf
 ```
 
-**5. Look back.** Every run is in the notebook:
+**5. Watch a model choose its words.** This one loads the weights (onto the
+GPU when llama-cpp-python was built for one), writes a reply, and records
+every token with everything it was choosing between:
+
+```text
+python -m athanor record my-model.gguf --prompt "Describe the relay plan." --max-tokens 200
+python -m athanor recording <the path it printed>
+python -m athanor.gui
+```
+
+The last line opens the Waterfall (`pip install athanor[gui]` for PySide6):
+the reply along the top, one row per token, the candidates across, the
+token taken highlighted on every row. **Aa read** writes each candidate in
+its cell; ◆ jumps to the next moment the model hesitated.
+
+**6. Look inside.** For a mixture-of-experts model, record which experts
+every layer used for every token, and see it beside the Waterfall:
+
+```text
+python -m athanor tap probe my-moe-model.gguf
+python -m athanor record my-moe-model.gguf --prompt "Describe the relay plan." --tap experts
+```
+
+The probe comes first: it checks, on your card, that the Tap changes
+nothing and reads llama.cpp's own numbers, and says what it costs. In the
+player the **expert map** sits under the candidates — the router's score
+for every expert at the cursor, the experts used framed; "one layer, over
+time" turns it into a second waterfall.
+
+**7. Look back.** Every run is in the notebook:
 
 ```text
 python -m athanor notebook list

@@ -2,8 +2,16 @@
 
 *Scoped 2026-09-27. **Phase 1 built 2026-09-28 (0.1.0)** — the engine,
 Inspect, Tokenize, Compare, Template, the notebook, the CLI and the public
-API; see CHANGELOG.md. Next: Phase 1.1 (numbers, slack, variants), the
-Phase 1 widgets (athanor.gui), ATK's host side, then spike S1 and Phase 2.*
+API. **The Waterfall built 2026-09-29 (0.2.0)**, ahead of the rest of
+Phase 2 because Bill asked for it — the recorder, the `.athrec` format, the
+player, and ATK's side: Chat's ⚗ record box and the Model Lab's Waterfall
+tab. **The Tap (spike S1) built 2026-09-29 (0.3.0)** at Bill's word ("Go
+ahead and start the tap") — proved exact on CPU, its Windows / CUDA cost
+and exactness waiting on `athanor tap probe` on Bill's card — with its
+first application, **M28's expert map**. **The Reader** (§4) — reading what
+a model thinks — designed the same day at Bill's request and parked while
+he works on other parts of ATK: *"But I promise, we will revisit it."* See
+CHANGELOG.md. Next: §5, "Where to pick up".*
 *Repository: `D:\Analyst_Toolkit\Athanor` → `github.com/photogbill/Athanor`;
 package `athanor`. **Open source, MIT** (decided 2026-09-27). **Standalone
 first**: any program can use it — ATK is one host among many, and hosts it
@@ -116,6 +124,12 @@ what is real:
    override changes it; the Report Card counts over-refusals on legitimate
    work. What Athanor does not produce is a refusal direction as a saved,
    reusable vector — that artifact is the ingredient removal needs.
+   **Writing into a model's state** (the Reader's T0, 2026-09-29) happens
+   only in Athanor's own sandbox contexts on the loaded weights — never in
+   a host's generation — to measure (a readout, a swap test, a knock-out),
+   never along anything refusal-related, and nothing written is kept as a
+   steering product. The Tap that runs inside a host's generation only
+   ever reads.
 10. **Standalone first.** Nothing in `athanor/` imports ATK — a test walks
    the package's AST and fails on any `atk` import. Everything ATK supplies
    (the GPU hand-off, model folders, a discussion's messages, a case's
@@ -308,6 +322,17 @@ Markdown / JSON. Append-only; editing a note keeps the original.
     usable-context table);
   - with a projector: does the mmproj belong to this text model (base-model
     name, projection width = embedding width)?
+- **The integrity ledger** (Phase 1.1). Bill, 2026-09-28: *"We can always
+  keep a copy of the model in a separate folder just for Athanor, so that if
+  anything is damaged we can learn from it and prevent it in the future."*
+  Every model file Athanor opens is identified already (size, date, header
+  hash); the ledger adds the full SHA-256, taken once, and checks the cheap
+  identity on every later open. A file whose date or size moved is hashed
+  again, and a changed hash is reported as what it is: this file is not the
+  one you measured. Optionally, a published hash the analyst pastes in (a
+  model page's SHA-256) is compared, offline. Bit rot, a half-finished
+  copy, a re-upload under the same name — each is caught before it is
+  measured, and each is a line in the log.
 
 #### 3.2 Tokenize — the context ruler (Phase 1)
 **Question:** how much of MY material fits, on which model?
@@ -393,6 +418,73 @@ writes is one line of the waterfall — the whole distribution it was choosing
 from at that moment — and the whole reply is a recording you can scrub
 through like an I/Q capture.
 
+**Built, 2026-09-29 (0.2.0).** Bill, 2026-09-28: *"I like the idea of being
+able to check a box in the chat interface for athanor record, so i can
+review the response on the waterfall tab for it. It should show the actual
+response at the top as we go through the waterfall over time, and the
+potentials on the waterfall."* Then, 2026-09-29: *"Can you have what is
+decided each time also present and highlighted?"* What exists:
+- **Recording live**, from a `Llama` the host already has
+  (`api.attach_recorder`), a reply carried on in parts as one recording, and
+  from the command line (`athanor record`). In ATK: the **⚗ record** box
+  beside Send, and an [open in the Model Lab] link on the reply.
+- **The player**: the reply along the top (the token at the cursor lit, the
+  rest dimmed or hidden, the words the model was unsure of underlined, hover
+  for how sure); **taken**, a column on every row with the token actually
+  written, whatever its rank (white frame: the favourite; amber and its rank:
+  not); the candidates across, favourite first; **Aa read**, which writes
+  each candidate in its cell so a row reads as the words weighed; step
+  numbers and ◆ **moments of doubt** in a gutter, and a key to jump between
+  them; the entropy beside it all; play at the recorded speed.
+
+**What building it taught.**
+- *Not the binding's custom-logits hook.* It works at the pinned commit
+  (proved on a test-built model), but it cannot see which token the sampler
+  took, only the logits, so the last token of every reply would have had to
+  be guessed. Wrapping the instance's `sample` sees both: llama.cpp's own
+  logits at the index the sampler read, and the token it picked. Tested:
+  recorded and unrecorded replies are identical under greedy, top-k/p,
+  min-p, penalties, logit bias, grammars, mirostat, a cache hit and a draft
+  model.
+- *A recording must be live to be exact.* Re-scoring a finished reply in one
+  batch rounds differently, and re-tokenizing its TEXT need not give back
+  the ids the model generated — models write non-canonical spellings. So the
+  after-the-fact recording (below) is labelled a reconstruction.
+- *Vision chats* advance the token count over image positions without
+  keeping ids there; those recordings keep the reply and leave the prompt's
+  ids out, saying why.
+
+**Next for the Waterfall**, in the order they pay back:
+- **Take this instead.** Right-click any candidate cell: the model is rewound
+  to that step (`llama_state_seq_*`, or the cache fork of §4's instruments)
+  and continues from the other word — a child recording joined to its
+  parent. The branching below, made one click from the cell that prompts
+  the question.
+- **End pressure.** A trace of the probability on the end-of-turn tokens at
+  every step: where the model wanted to stop, where a reply ran on past it,
+  and where one stopped with the thought unfinished. ATK's cut-off replies
+  (atk/core/replies.py, 2026-09-24) are exactly what it would have shown.
+- **The sampler, replayed.** A recording holds the model's RAW distribution
+  at every step, before the sampler touched it — so the sampler can be
+  re-run on it without the model: "at temperature 0.2, how likely was it to
+  take the same token here?", step by step, and the chance the whole reply
+  would have come out the same. The educational version of choosing
+  settings, and the practical one: see which steps a setting would change
+  before spending a regeneration on it. ESTIMATE — repetition penalties and
+  grammars depend on the path taken, and are marked where they apply.
+- **Notes on steps.** The analyst marks a step and writes why; the note is an
+  annotation in the recording, so a recording becomes something you can hand
+  someone ("look at step 212").
+- **A clip for a report.** A stretch of steps as an image, or as a
+  self-contained HTML page with the candidates in it.
+- **Claim confidence (in ATK).** ATK's grounding check already sorts a
+  reply's specifics into sourced and unsourced; the recording says how sure
+  the model was of each. Crossed, that is four kinds of claim, and the one
+  that matters most is new: **unsourced and confident** — the model's priors
+  speaking without hesitation, the claims most likely to be believed and
+  least supported. A marker on each claim in the reply; M17's audit, done on
+  every recorded reply for free.
+
 - **The recording.** Per step: the chosen token; the top 256 candidates with
   their log-probabilities; the probability left in the tail; the entropy;
   the wall-clock time; and both the model's RAW distribution and what the
@@ -446,6 +538,10 @@ through like an I/Q capture.
   which road each one took.
 - The instrument an RF analyst already reads every day, turned on a model:
   the same eye for a steady carrier, a drift, a burst, a spur.
+- **After the fact** (above) is labelled a reconstruction: the reply's text
+  re-tokenized, scored in one batch. Where the re-tokenized ids differ from
+  what was generated (unknowable after the fact), the numbers are for a
+  different spelling of the same text — M24 measures how much that matters.
 
 #### 3.7 Surprise (Phase 2)
 **Question:** where does this text surprise the model — and how much, overall?
@@ -565,6 +661,13 @@ evaluation).
 - "Is Q4_K_M enough for translation, or spend the VRAM on Q6_K?" answered
   with a number instead of a forum post. Held to `llama-perplexity
   --kl-divergence` (S2).
+- **The KV cache's precision.** llama.cpp can keep the cache at 8 or 4 bits
+  (`type_k` / `type_v`), which on a 16 GB card is the cheapest way to more
+  context. What it costs is measured the same way: KL divergence against an
+  F16 cache, on Bill's material, beside how many more tokens it buys (ATK's
+  VRAM plan). Long-context retrieval is where it hurts first, so 3.8's
+  needle grid is re-run with it. *From:* KIVI, Liu et al. (2024), on how
+  unevenly keys and values tolerate quantization.
 
 #### 3.14 Arena — blind A/B (Phase 3)
 **Question:** which do I actually prefer?
@@ -617,15 +720,67 @@ comes from.*
 
 ### The instruments the wing needs
 
-- **The Tap (spike S1).** llama.cpp calls an evaluation callback for every
-  tensor it computes (`cb_eval` in the context parameters — present in the
-  pinned binding), which is how `examples/eval-callback` prints
-  intermediates. From Python: a ctypes callback that answers "yes" for the
-  tensors wanted (each layer's output, `l_out-N`) and copies them out with
-  ggml's `ggml_backend_tensor_get`. **Not yet proven from Python on Windows
-  / CUDA** — the binding loads libggml but binds none of its functions; the
-  spike binds four and measures the cost per token. Every "internals"
-  experiment below waits on it.
+- **The Tap (spike S1) — BUILT 2026-09-29 (0.3.0), `athanor/tap/`.**
+  llama.cpp calls an evaluation callback for every tensor it computes
+  (`cb_eval` in the context parameters, what `examples/eval-callback`
+  prints with): it asks "do you want this one?", computes up to the wanted
+  tensors, and hands each over. From Python: a ctypes callback (one
+  dispatcher per context, idle until a Tap is set on it) and five ggml
+  functions bound from the binding's own `ggml-base` (`ggml_get_name`,
+  `ggml_nbytes`, `ggml_backend_tensor_get`, and `ggml_init` /
+  `ggml_new_tensor_4d` for a self-test that pins the start of
+  `struct ggml_tensor` before anything is read). The callback is fixed when
+  a context is made, so `make_tappable` rebuilds a `Llama`'s context once
+  (weights shared). **What building it taught:**
+  - *Exact on CPU.* Tapped and untapped logits are bit-identical, idle and
+    while copying every layer; the Tap's copy of `result_output` IS the
+    logits; the last layer's output through the final norm and the output
+    matrix (done in numpy) reproduces the logits to ~2e-6 — the logit lens
+    stands. An early "difference" of 7e-6 turned out to be the binding
+    re-using its prompt cache between runs (batched vs single-token
+    kernels), not the Tap: the probe resets between runs for that reason.
+  - *The callback must never return false after computing* — llama.cpp
+    stops the graph there and the logits are garbage — and a Python
+    exception in a ctypes callback returns 0. Every path is wrapped.
+  - *Rows.* A tensor's token axis is axis 1 for almost everything and 2
+    for the per-expert MoE tensors (`[1, n_used, tokens]`); the last layer
+    holds only the output rows (llama.cpp drops the rest there). A
+    forward pass nobody announced (a vision handler decoding by itself)
+    gives each tensor's last row.
+  - *Cost, on the tiny test models* (CPU, not representative): idle within
+    noise to ~10 %; copying a few tensors adds a fixed cost per piece the
+    graph is split into. On a real model the per-token compute dwarfs it —
+    **to be measured on Bill's card with `athanor tap probe`**, which also
+    answers the open question: does computing the graph in pieces on CUDA
+    (no fusion across a piece boundary) change the last bits?
+  - *Micro-batches.* A batch longer than the context's `n_ubatch` runs
+    the whole graph once per micro-batch (consecutive `n_ubatch` tokens),
+    inside one `llama_decode`. The graph's first node is asked about first,
+    so the Tap marks each new graph by that name and stitches the rows
+    back into batch order (review, 2026-09-29: before the fix, every layer
+    but the last was silently dropped whenever `n_batch > n_ubatch`).
+  - *Names repeat.* llama.cpp gives some names to several nodes in one
+    graph (`Qcur-0` three times: before the reshape, after it, after
+    RoPE). The Tap keeps the first and says so; the token axis of a
+    tensor it does not know is read from its shape against the
+    micro-batch's token and output counts, never guessed from the name.
+  - *A context that cannot be rebuilt* (memory taken in the gap between
+    freeing the old one and making the new) is replaced by a stand-in that
+    raises in Python — before the fix, the next generation handed
+    llama.cpp a freed context and the process died.
+  - *Decided for ATK:* the Tap goes into the loaded model the first time a
+    reply is recorded with the Lab's experts box ticked (inside the
+    engine's lock, before the generation), and comes out when the box is
+    unticked (`lab_host.release_tap`, on a worker through
+    `LLMEngine.run_on_model`) or the model is reloaded. Each change
+    rebuilds the context, so the next reply re-reads the conversation.
+    While it is in, it costs one Python call per graph node per token even
+    when idle, and a busy Python thread elsewhere (ATK's GUI) makes each
+    call wait for the GIL: the probe's `tapped_idle` on the card says
+    whether that matters.
+  **Not yet:** attention maps (need flash attention off and per-head
+  tensors), the residual stream in ATK's recordings (800 KB a token on a
+  24B — the Tap can, ATK does not offer it until M30 has a view for it).
 - **The Wheel.** `llama_set_adapter_cvec` adds a vector to the residual
   stream across a range of layers — a control vector. In the pinned binding.
 - **Surgery (S2 + S5).** A GGUF writer, and llama.cpp's own `llama-quantize`
@@ -1103,6 +1258,437 @@ This is also the test for two ideas from the tokenizer notes (below): a
 against crafted inputs. *Needs:* logits (Phase 2). llama.cpp accepts any
 token sequence, so there is no patch.
 
+### M25 · Does this doubt matter?
+A moment of doubt is only interesting if the roads part. "Large" or "big"
+is doubt about wording; "Tuesday" or "Thursday" is doubt about the world.
+At a moment of doubt, branch: let the model continue a handful of times
+from each of the leading candidates, embed the continuations (on the CPU,
+ATK's embedders) and cluster them by meaning. One cluster: the doubt was
+about phrasing. Several: the model did not know, and the claim that follows
+is the one to check. The number is semantic entropy, computed at the one
+step where it matters rather than over whole answers — so it costs a few
+short continuations, not a hundred full ones. *Status:* semantic entropy is
+established (Kuhn et al., 2023; Farquhar et al., Nature 2024; the cheaper
+probes of Kossen et al., 2024); locating it at the Waterfall's own doubt
+points is the new part. *Needs:* branching (3.6), an embedder.
+EXPERIMENTAL.
+
+### M26 · When did it decide?
+A reasoning model thinks for thousands of tokens before a short answer.
+Fork the cache at checkpoints through the thinking (every 50 tokens, say),
+close the thought there, and read what it would answer at that moment: the
+answer's distribution, plotted against the thinking. Three shapes are
+possible, and each says something. It settled early and thought on (the
+rest was checking — or padding). It settled late (the thinking did the
+work). It changed its mind (the thought that changed it is at the step
+where the answer moved — the Waterfall shows it). For ATK there is a
+practical result: a thinking budget that stops when the answer has been
+steady for long enough, instead of running out mid-thought (the cut-off
+replies of 2026-09-24). *Status:* truncating a chain of thought to see
+whether the answer depends on it is Lanham et al. (2023); stopping early
+when the answer converges is recent work (DEER, 2025; "Answer Convergence
+as a Signal for Early Stopping", 2025). Athanor's part is seeing it on
+Bill's own models and questions, inside a recording, and testing whether a
+convergence stop costs any accuracy on his material. *Needs:* forking the
+cache; the Waterfall's thinking annotation. EXPERIMENTAL.
+
+### M27 · Canary recordings
+ATK builds llama-cpp-python from llama.cpp's master (2026-08-13), so the
+code under every model changes without anyone deciding it should. A canary
+is a handful of fixed prompts — Bill's kinds of work: a Pashto passage, an
+extraction, a long document, a tool-free reasoning question — recorded once
+per model and kept. After each update, the same prompts are recorded again
+and compared step by step: the KL divergence at every token, and the first
+step where the chosen token changed. Nothing changed is a green line. A
+changed tokenizer, template or kernel shows as the step where the replies
+part, with the recording to show it. *Status:* llama.cpp's own
+`--kl-divergence-base` does the batch form for quantization; recorded,
+per-token canaries across builds are Athanor's. *Needs:* S3 (whether logits
+are bit-identical run to run on the card; the CPU path as the reference if
+not), the Waterfall's comparison view. Cheap to run: seconds per prompt.
+
+### Watching the inside — what the Tap opens
+Bill, 2026-09-29: *"Is it possible to have something that can break out the
+MoE models … highlighting the model inherent persona's being utilized? Also
+can you think of other ways to monitor the inner thought process of a
+model?"* Everything below reads the model's insides through the Tap (S1),
+so S1 is the gate for all of it — and each one records into the Waterfall,
+so what happened inside is scrubbed beside what was written.
+
+### M28 · The expert map (mixture-of-experts models)
+In a mixture-of-experts model (Mixtral and Dolphin-Mixtral, Qwen3's
+30B-A3B, gpt-oss, DeepSeek) every layer's router picks a few experts for
+every token. llama.cpp names what the router decided — `ffn_moe_topk-N`,
+the experts chosen at layer N, and `ffn_moe_weights-N`, how much each
+counted (b11093, llm_graph's MoE block) — so the Tap reads it for a few
+kilobytes a token. Shown as a second waterfall beside the first: layers
+down one axis, experts across, lit where they fired, for the token at the
+cursor; and over a whole reply, which experts a stretch of text leaned on.
+Then the questions worth asking: do the same experts carry Pashto and
+English? Code and prose? Does a fine-tune (Dolphin-Mixtral against its
+Mixtral base) re-route, or only re-weight? Does an expert that is never
+used exist (a candidate for pruning, M5)?
+**What to expect — honestly.** Experts are not personas. Mixtral's own
+analysis found no clear assignment of experts by topic, only patterns
+closer to syntax (Jiang et al., 2024); a 2026 study argues routing follows
+the geometry of the hidden states rather than domains (Wang et al., 2026);
+another finds experts more interpretable than dense neurons, as
+fine-grained "task experts" (ICML 2026). The map is how to see which is
+true of Bill's models, on his material. *Needs:* the Tap; an optional
+second stream in the recording format (per step: layers × experts used,
+ids and weights). EXPERIMENTAL.
+**Built 2026-09-29 (0.3.0).** `attach(llm, tap="experts")` records
+`ffn_moe_topk`, `ffn_moe_weights` and `ffn_moe_probs` for every layer into
+`.athrec-tap`; `Recording.tap.experts()` reads it; the player's expert map
+shows it three ways — at the cursor (the router's score for every expert in
+dB, the experts used framed with their share), over the reply / its
+thinking / its answer (how often each expert was used), and one layer over
+time (a second waterfall, clickable). ATK: the Lab's "also record which
+experts the model uses" box. **Next for it:** routing across a comparison
+(the same prompt through Dolphin-Mixtral and Mixtral: re-routed, or only
+re-weighted?); a "which tokens used this expert" list (click an expert,
+see every token it carried — the quickest way to see what an expert is
+*for*); and never-used experts across a battery (M5's pruning question).
+
+### M29 · Trait monitors — the personas a model plays
+The characters a model can play live in its activations as directions,
+not in its experts: Anthropic's persona-vector work found linear directions
+for traits (sycophancy, a readiness to make things up, and others) that can
+be measured token by token, and that shift before the behaviour shows
+(Chen et al., 2025). Athanor builds a monitor the way M2 builds a steering
+direction — the mean difference of activations between contrasting
+examples — but only READS it: each trait becomes a trace beside the
+Waterfall, lighting up where the model starts agreeing because the user
+seems to want it, hedging, turning formal, or reaching past its evidence.
+For an analyst the useful ones are sycophancy (is it telling me what I
+implied I wanted?) and confabulation (is it about to supply a specific it
+was not given? — M3's question, as a live trace). How well each monitor
+detects its trait is measured on held-out examples and shown with it.
+*Boundary:* monitors for style, tone and honesty traits; never a refusal
+direction (principle 9). Works on dense and MoE models alike. *Needs:* the
+Tap. EXPERIMENTAL.
+
+### M30 · Decision depth
+With the logit lens (M1) at every step, each token has a depth: the first
+layer at which it was already the model's answer and stayed so. Easy tokens
+are decided early; the hard ones late, or only at the last layer. A trace
+beside the Waterfall, and a finding across a reply: which kinds of words
+needed the whole network (names, numbers, the turn in an argument), and
+whether the moments of doubt are the deep ones. Cheap — it is M1's grid,
+reduced to one number per token. *Needs:* the Tap, M1.
+
+**Calibrating the lens — one button** (designed 2026-09-29). Bill: *"Can we
+automate the refinement process for the tuned lens? So that after you load
+the cognitive core, you click a button to calibrate the lens?"* and *"I can
+give up some time for accuracy."* The plain logit lens reads early layers
+poorly (they are not yet in the output's terms); the tuned lens (Belrose
+et al., 2023) fits a small translator per layer so each layer's reading
+matches the model's own final distribution. The answer key is the model
+itself, so calibration needs no labelled data, nothing downloaded and
+nothing shipped. Local models only — an online core has no insides to
+read.
+- **The button**, in the Model Lab, for the model that is loaded:
+  1. *Text through the model.* By default its own writing — answers to a
+     fixed set of neutral prompts; optionally a folder of the analyst's
+     documents, or the recorded chats. The lens is most faithful on text
+     like its calibration text, so calibrating on one's own material, in
+     one's own languages, is an advantage. The Tap takes every layer's
+     output and the final distribution for each token (`rows="all"`).
+  2. *A translator per layer*, trained so that layer's reading matches the
+     final distribution (KL divergence), initialised to the identity.
+  3. *A graded result.* 10% of the text held back; one chart — error by
+     layer, plain lens against tuned lens, MEASURED — which is also the
+     answer to "how far can the early layers be trusted?". The error falls
+     as it trains; worth watching.
+  4. *Kept under the model's fingerprint* (the header SHA-256 and size) in
+     `<data_dir>/lenses/`, loaded automatically with the same file; a
+     different file or quant is flagged uncalibrated (whether a
+     calibration carries across quants of one model is itself worth
+     measuring).
+- **Modes** — the size is a setting, not a guess, and Thorough is the
+  default:
+  - *Quick* — a slim translator (low rank, a few million numbers a layer),
+    scored against each token's few thousand likeliest candidates, ~20,000
+    tokens: under an hour on the CPU (ESTIMATE).
+  - *Thorough* — the paper's own: a full affine translator (d² + d, ~26 M
+    numbers a layer at d = 5,120; ~1 billion over 40 layers), exact KL over
+    the whole vocabulary (131,072), ~100,000 tokens (a bigger translator
+    needs more text or it memorises). Two phases: the model reads the text
+    on the card and each layer's outputs go to disk as float16 (~40 GB for
+    100k tokens × 40 layers × 5,120, deleted afterwards); then the chat model
+    is set aside (the host's `borrow_gpu`) and the card trains one layer at
+    a time — about an hour or two (ESTIMATE). That needs a CUDA build of
+    PyTorch importable by Athanor — an OPTIONAL dependency (BSD), checked
+    by `capabilities`; without it, Thorough runs overnight on the CPU with
+    the candidate-restricted score, and says so.
+  - *Sweep* — calibrate at several sizes (rank 64, 256, 1,024, full) and
+    plot the held-out error of each: where it stops falling is the size
+    this model needs — the measured answer to "is a few million enough?".
+- **Manners.** Phase 1 releases the engine between batches, so the host's
+  chat still answers in the gaps; progress, time left and the falling error
+  are shown; a stopped calibration keeps nothing half-made.
+- **Needs:** the Tap (built); the output matrix dequantized — ~2.7 GB at
+  float32 for a 131k × 5,120 matrix; Bill's quants carry `output.weight`
+  as Q6_K, which Athanor decodes through gguf-py (llama.cpp's own, MIT,
+  `pip install gguf`); the final norm's weights and epsilon from the file.
+- **The same machinery trains the disposition lens** (the Reader's T2(a)):
+  the target is the next K tokens instead of the next one.
+- **Its limit:** a calibrated lens shows what can be read out of a layer,
+  not that the model "thinks in" those words there. A better instrument,
+  not a mind-reader.
+
+### M31 · The language of thought
+Multilingual models asked in one language and answering in another pass
+through a third inside: on Llama 2, the logit lens shows French-to-Chinese
+translation going through English in the middle layers (Wendler et al.,
+2024). For ATK's Pashto and Dari work this is a direct question: when the
+model translates Pashto, what language is it thinking in, layer by layer —
+and do the words that come out wrong come from the layers where it was
+thinking in English? The logit lens's tokens, sorted by script and
+language, as a band of colour beside the Waterfall. *Needs:* the Tap, M1.
+
+### M32 · Task drift — did a document start giving orders?
+An analyst feeds a model documents nobody vetted, and a document can carry
+instructions ("ignore the above and …"). Activations taken just before a
+document is read and just after it differ in a recognisable way when the
+text inside has pulled the model off its task — a linear probe on that
+difference catches it, including injections the probe never saw
+(Abdelnabi et al., 2024, "Get my drift?"; Microsoft's TaskTracker). For
+ATK: a flag on the document, before the reply is trusted. Defensive,
+read-only, and one of the most practical things on this list. *Needs:* the
+Tap; a probe trained on examples Athanor can generate. EXPERIMENTAL.
+
+### M33 · Hidden doubt
+The Waterfall shows the doubt the model expressed — the probabilities of
+what it wrote. A probe on its insides (M3) shows what it "knows" about
+whether its claim is true. Where the two disagree is the interesting case:
+a fluent, confident sentence the internals do not believe. Marked in the
+reply like a moment of doubt, in a different colour. *From:* Kadavath et
+al. (2022); Azaria & Mitchell, "The Internal State of an LLM Knows When
+It's Lying" (2023). *Needs:* the Tap, M3.
+
+### M34 · Features, and the circuits between them
+The furthest reach. A sparse autoencoder turns a layer's activations into
+thousands of features, many of them human-readable ("a date", "a military
+unit", "the model is unsure"); a feature waterfall is the most detailed
+picture of thought there is. Published dictionaries exist for some open
+models (Gemma Scope for Gemma 2, Lieberum et al., 2024; Llama Scope for
+Llama 3.1 8B, 2024 — each licence checked before use), and Athanor can
+apply one to a GGUF of the same model, reporting how well it reconstructs
+the quantized model's activations (the honest check that the dictionary
+still fits). Circuit tracing — which features caused which, across layers
+(Ameisen et al., Anthropic, 2025, with an open-source tracer) — is the
+ceiling; it needs gradients (S6) and is recorded here as a direction, not a
+promise. For Bill's own models no dictionary exists: training one on 64 GB
+of RAM is possible for a layer at a time, and slow. *Needs:* the Tap; a
+dictionary; S6 for circuits. EXPERIMENTAL.
+
+### The Reader — reading what a model thinks (a programme)
+Bill, 2026-09-29: *"If you were designing a tool to read what the model
+thinks, what approaches would you consider. Can we get there, there must be
+a way. Don't limit yourself to current research, but consider the vector of
+research and anticipate the developments not yet demonstrated or
+discovered, and lets try to do that."*
+
+**The target, stated honestly.** No instrument will produce a transcript of
+a thought: concepts share directions (superposition), many have no single
+word, and some computation may have no words at all. What is reachable is
+an **assessed account** — for any stretch of a reply, what the model was
+representing and which of it drove what it wrote, each claim sourced to the
+instruments that saw it and graded the way an analyst grades reporting:
+*single source*, *corroborated* (two independent instruments agree),
+*causally confirmed* (changing it in a sandbox changes the answer as
+predicted). Two bearings make a fix; one is only a line.
+
+**The rule that makes it honest:** every reading carries its grade, and the
+view never shows a single-source reading as fact.
+
+**Where the field is heading, and what the Reader bets on:**
+- *From hand-built dictionaries to learned translators* — activations read
+  out in plain language by a model trained for it (LatentQA, Pan et al.
+  2024; Activation Oracles, Karvonen, Marks et al. 2025, ICML 2026 oral).
+  The Reader collects the training data for such a translator as a
+  by-product (verbalisations that passed a causal test are labelled pairs)
+  and trains one when S6 gives gradients.
+- *From token-by-token lenses to the workspace* — Gurnee et al. (Anthropic,
+  2026) found a small working set, at most ~25 concepts, in the middle
+  layers, carrying unspoken intermediates, plans and intentions (M19). The
+  Reader's backbone is a desktop approximation of it (T2).
+- *Reasoning leaving the visible text* — compressed or latent chains of
+  thought. When models stop writing their reasoning, the inside is the only
+  window left; the Reader reads vectors, so it does not depend on the model
+  writing anything.
+- *Causal evidence as the standard* — built in from the start (T7).
+- *Time* — the residual stream as a signal over tokens, with slow and fast
+  components, is little explored; T3 is the Reader's own bet.
+
+Every part below is forward passes only unless it says otherwise, runs on a
+GGUF through llama.cpp, and keeps to principle 9: writes happen only in
+Athanor's own sandbox contexts on the loaded weights (never in a host's
+replies), for measurement, never along anything refusal-related, and no
+vector is kept as a steering product.
+
+**T0 · The write path (spike S7).** Two ways to put a vector into the
+stream at one layer and one position, in a sandbox context:
+(a) *the one-token control vector* — decode up to the position normally;
+set a control vector on layer ℓ equal to (target − the position's own
+`l_out-ℓ`, measured by a dry run with the Tap); decode that single token;
+clear it. Only the pinned binding's API (`llama_set_adapter_cvec`, a
+`ggml_add` on each layer's output from layer 1) — the same mechanism as S6
+road 1. (b) *the Tap writing* — in the evaluation callback, after the row is
+computed and before the graph goes on, `ggml_backend_tensor_set` on that row:
+any position, any batch, but it must be shown to be honoured on CUDA with
+fusion and graph reuse. The spike proves one or both and measures the
+error of each against a reference (a replaced state must reproduce the
+logits the donor context gave).
+
+**T1 · The Mirror — the model reads its own mind aloud.** Take a hidden
+state from a recording (layer ℓ, token t); in a sandbox, a prompt with a
+placeholder — identity (*"cat → cat; 1135 → 1135; hello → hello; ? →"*) or
+descriptive (*"The thought [?] is about"*) — and put the state into the
+placeholder at layer ℓ′ (T0); the model writes a few words about it. In the
+player: click a token, *"What was it thinking here?"*, and read the answers
+at a ladder of layers. A second or two a reading on the card (ESTIMATE).
+*Limit:* the reader is the same model and can confabulate — which is why
+T9 needs a second bearing. *From:* Patchscopes, Ghandeharioun et al.
+(2024); SelfIE, Chen et al. (2024). The first visible payoff of the Reader.
+
+**T2 · The workspace on a desktop.** The J-lens needs Jacobians averaged
+over a thousand contexts — out of reach exactly for a 24B on one card
+(M19 keeps the exact version, via S6). Three approximations, each
+labelled: (a) *the disposition lens* — a per-layer translator, trained the
+way the tuned lens is (the same Calibrate button, M30), but to predict the
+tokens the model will write over the next K positions rather than the next
+one: the regression cousin of the J-lens's "disposed to say later",
+self-supervised from the model's own recordings; (b) finite-difference spot
+checks (S6 road 1) along its strongest directions, to say how causal they
+are; (c) the paper's own swap test — exchange a concept's component between
+two prompts (T0) and see whether the answer follows it. Shown as a strip
+beside the Waterfall: the few concepts held in mind at each token.
+
+**T3 · The Demodulator.** An RF analyst's approach, not seen published in
+this form (to be checked before anything is claimed). Treat each layer's
+output as a multichannel signal over token time. Hypothesis: the slow part
+— filtered over tens to hundreds of tokens — carries the *frame* (topic,
+goal, stance, the persona being played, the plan), and the fast part the
+current word and its grammar, the way a carrier carries its modulation.
+Filter the recorded residuals into bands (moving averages, wavelets), read
+each band through T1, T2 and T4, and show the carrier as a band beside the
+Waterfall; change-point detection on it marks *"the frame shifted here"* —
+from reporting to speculating, from summarising to arguing, from answering
+to pleasing. A spectrogram of the leading components shows any rhythm. The
+test that decides it: do the slow bands decode to the same concepts
+across a reply, and do they shift where a reader would say the frame
+changed? If not, it is a negative result and recorded as one. EXPERIMENTAL.
+
+**T4 · The Atlas — the model's own concept map, built from Bill's
+material.** Overnight: run a corpus (documents, recordings, the model's own
+writing) through the model and stream one middle layer's outputs into
+online clustering (thousands of centroids, by angle) — nothing stored but
+the centroids. Label every centroid twice, independently: the local model
+reads the twenty contexts nearest it and says what they share; the Mirror
+verbalises the centroid itself. Where the two labels agree, the label is
+trusted. Each token then shows its nearest concepts. Grows every night;
+one atlas per model. The step up is a real sparse dictionary (M34) trained
+from the same stream when there is data enough.
+
+**T5 · The Compass — where the thought is heading.** For reasoning models.
+Overnight, the model thinks through a few hundred varied questions; the
+target is its own middle-layer representation of the answer it finally gave
+(the mean over the answer's tokens — no outside embedder); a linear map
+(ridge regression, closed form) from each position of the thinking to that
+target. In the player, a needle: how closely the thought at each token
+points at the answer it would give, and at alternatives (M15, M25). The
+lock-in point is when the destination was fixed. **The faithfulness meter:**
+lock-in long before the written reasoning "arrives" says the rest was
+justification, not route — checked by M26's early answer (cut the
+thinking at the lock-in and see whether the answer is already the same)
+and by T7. *From:* Future Lens, Pal et al. (2023); Lanham et al. (2023);
+"Reasoning Models Don't Always Say What They Think", Chen et al.
+(Anthropic, 2025).
+
+**T6 · Background subtraction.** The same prompt twice with one thing
+changed (*"the source is reliable"* / *"unreliable"*); subtract the two
+recordings layer by layer: where the difference enters, where it grows,
+where it is squashed, and — read through T1/T2/T4 — what it means. The same
+subtraction between a fine-tune and its base on the same text shows what
+the fine-tune changed inside. Two recordings and a subtraction: the
+cheapest instrument here.
+
+**T7 · Fault injection — what actually drove the answer.** In a sandbox,
+remove one concept's component (projected out at a layer and position, T0),
+or resample one sentence of the reasoning and let the rest follow (Thought
+Anchors, Bogdan et al., 2025), and measure what happens to the answer. This
+is how a reading earns *causally confirmed*. Measurement only; principle 9.
+
+**T8 · Introspection calibration — does this model know its own mind?**
+After Anthropic's concept-injection experiments (Lindsey, 2025): put a known,
+neutral concept into the stream (T0 — "the ocean", "shouting", "bread") and
+ask the model whether it notices an injected thought and what it is about;
+compare with trials where nothing was injected. The result is a score, per
+model and per layer, for how far its self-reports can be trusted — and then
+its self-reports (*"what were you thinking when you wrote this?"*) become
+hypotheses for the other instruments to test.
+
+**T9 · The assessed account — the product.** Fusion of all of the above
+into one view per recording: the concepts the instruments agree on, graded;
+where the frame shifted (T3); when the destination locked (T5); and where
+the inside and the written reply diverge — M33's hidden doubt, generalised.
+In words, the way an assessment is written: *"We assess with moderate
+confidence that from token 120 the model represented the source as
+unreliable (workspace and atlas agree; the swap test flips the conclusion)
+while its text stayed neutral."*
+
+**Order within it:** S7 → T1 (the first visible payoff) → T6 (cheap) → M30
+and T2(a) (one Calibrate button) → T5 → T4 → T7 and T8 → T3 (needs the
+decoders) → T9. Each ships on its own and says what it could not do.
+
+**Implementation notes** (worked out 2026-09-29, for whoever picks it up):
+- *T0(a) in detail.* `llama_set_adapter_cvec(ctx, data, len, n_embd,
+  il_start, il_end)`: `data` is n_embd × n_layer floats starting from layer
+  1 (there is no layer 0 slot: `llama_adapter_cvec::apply` skips it), so
+  injection is possible at layers ≥ 1; set `il_start = il_end = ℓ`, only
+  that layer's slice non-zero; `data = NULL` clears it. It is added to the
+  layer's output (`build_cvec`, just before `l_out-ℓ` is named), for every
+  token of the decode — hence the one-token decode. The spike must show
+  that changing the vector between decodes is honoured under graph reuse
+  (`LLAMA_GRAPH_REUSE_DISABLE` is the fallback) and measure the error of a
+  full replacement against a donor context's logits.
+- *Where a state to read comes from.* Either a recording made with the
+  residual Tap at the layers wanted (float32: 20 KB per layer per token at
+  d = 5,120; float16 halves it), or — cheaper, on demand — a replay: a
+  sandbox context reads the recording's prompt ids and chosen ids up to
+  the token, the prompt as one batch and the reply one token at a time,
+  the shape it was generated in (re-scoring in one batch rounds
+  differently: the Waterfall's own note), with the Tap on. Not possible for
+  a vision prompt (its ids are not kept).
+- *T1's layers.* Source layer ℓ and target layer ℓ′ are both sweeps;
+  Patchscopes found early target layers decode best. The prompt set
+  (identity, description, "is it about…" yes/no questions) is Athanor's own
+  and versioned, so readings stay comparable.
+- *T2(a)'s data* is the Calibrate button's: the same activations with a
+  K-token-ahead target.
+- *T3's data.* Every fourth layer's output over a reply — about 200 KB a
+  token at float32 on a 24B; bands are computed after the fact from the
+  recording, so the filters can change without recording again.
+- *T4.* Mini-batch spherical k-means (K = 4,096 to start) on one layer
+  about 60% of the way up; the labelling prompt shows the model the 20
+  nearest contexts with the token marked; the Mirror's label is taken from
+  the centroid alone; agreement is scored by the model itself as a yes/no
+  and by overlap of the words.
+- *T5.* A few hundred questions × ~1,000 thinking tokens ≈ 300,000
+  positions; ridge regression over 5,120 dimensions is one 5,120 × 5,120
+  solve (numpy, seconds); held-out questions for the grade.
+- *T7.* Projecting a direction out at every position means stepping one
+  token at a time with a new vector each step (T0a), or the Tap writing
+  (T0b) — slow but mechanical; overnight for a long reply.
+- *T8.* Concept vectors are M2's mean differences for neutral concepts at
+  one layer; half the trials inject, half do not; the score per layer is
+  the hit rate minus the false-alarm rate, with the names the model gives.
+- *Storage* follows decision 7 (retention); the big items (residual
+  recordings, calibration activations) are deleted when their product is
+  made unless the analyst keeps them.
+
 ### From the tokenizer notes (2026-09-28)
 Bill shared a Gemini conversation about tokenizers and asked what was useful
 in it. Adopted:
@@ -1140,7 +1726,8 @@ Not adopted, with the reason for each:
 
 **Spikes first — each a day or less, each answering one question:**
 - **S1 the Tap** — capture `l_out-N` from Python on Windows / CUDA; cost per
-  token. Gates M1–M3.
+  token. Gates M1–M3. **Built 2026-09-29**, exact on CPU; Windows / CUDA:
+  `athanor tap probe MODEL` on Bill's card is the last step of the spike.
 - **S2 the tools** — build `llama-perplexity`, `llama-bench`,
   `llama-tokenize`, `llama-quantize`, `llama-imatrix`, `llama-gguf-split`
   from the llama.cpp tree install.bat already compiles (b11093); install.bat
@@ -1150,6 +1737,10 @@ Not adopted, with the reason for each:
 - **S4 vocab-only speed** — on Windows, for Bill's 14–18 GB files.
 - **S5 the writer** — native or pinned gguf-py (MIT); round-trip a real file
   byte-identical before trusting it with surgery.
+- **S7 the write path** — put a chosen vector into the residual stream at one
+  layer and one position, in a sandbox context: the one-token control
+  vector, and the Tap writing from its callback (T0). Is the replacement
+  exact on CPU and on CUDA? Gates the Reader's T1, T2(c), T7 and T8.
 - **S6 gradients, on the GGUF** — M19 needs how the output responds to a
   layer's activations. Bill, 2026-09-27: *"I want to be able to do it mainly
   on GGUF"*, with 64 GB of RAM behind the card. Two GGUF roads, both read in
@@ -1194,10 +1785,44 @@ Compare, Template. Useful the day it lands; risks nothing.
 **Phase 1.1**: numbers, slack and variants (3.2). They need only the
 vocabulary and the embedding rows, so no model has to run.
 
-**Phase 2 — behaviour** (one model): Surprise first, because it is how every
-later change is judged, and because the after-the-fact recorder is the same
-machinery; then **the Waterfall** (the flagship — recorder, player,
-branching), Next Token, Context, Speed, Structure, Override.
+**Phase 2 — behaviour** (one model): **the Waterfall's recorder and player
+are built** (0.2.0, brought forward at Bill's request). Next in Phase 2,
+in order: Surprise (how every later change is judged, and the same
+machinery as the after-the-fact recording); the Waterfall's branching
+("take this instead") and its comparison view; end pressure; then Next
+Token, Context, Speed, Structure, Override. M27's canaries come with the
+comparison view and S3; M25 and M26 as soon as branching and the cache
+fork exist — both need only logits, no Tap.
+
+**The Tap (S1) is the gate for M1, M3, M9, M16, M19, M20 and M28–M34** —
+the whole of "watching the inside". **Built 2026-09-29 with M28's expert
+map.** Next on it: the probe on Bill's card (the spike's last answer), then
+M30 (the logit lens, reduced — the lens is already proved against the
+logits by the probe; what remains is the output matrix dequantized in
+chunks, and the view), then M20's R0.
+
+**The Reader** (2026-09-29, §4) builds on the Tap: S7 first, then the
+Mirror (T1) as its first visible payoff; its order is in its own section.
+
+**Where to pick up** (parked 2026-09-29 while Bill works on other parts of
+ATK — *"I promise, we will revisit it"*), in order:
+1. **The probe on Bill's card** — the last step of S1. From the Athanor
+   folder: `..\ATK\envs\atk_core\Scripts\python.exe -m athanor tap probe
+   <model.gguf>`, once with a mixture-of-experts model (Mixtral,
+   Qwen3-30B-A3B) and once with a dense one (Magistral). It answers: does
+   computing the graph in pieces on CUDA change the last bits, what does the
+   Tap cost idle and copying, does the lens reproduce the logits there.
+   Bill pastes the output; the numbers go into the Tap section above.
+2. **S7 and the Mirror (T1)** — the write path proved, then "What was it
+   thinking here?" in the player.
+3. **M1/M30 and the Calibrate button** (Thorough by default, the Sweep) —
+   and T2(a) on the same machinery.
+4. Then the Reader in its own order (T6, T5, T4, T7/T8, T3, T9).
+
+**Next, concretely, outside the Reader** (2026-09-29): Phase 1.1 (numbers, slack, variants, the
+integrity ledger) and the Phase 1 tabs' widgets in the Lab — Inspect,
+Tokenize, Compare, Template are built as engines but not yet as pages; then
+Surprise; then "take this instead".
 
 **Phase 3 — judging** (several configurations): Quantization, Arena, Report
 Card, Embedders, Adapters.
@@ -1242,6 +1867,40 @@ Athanor for ATK's sake.
   unload, restore — escalate's pattern), the VRAM plan, the model folders
   (`discover_models`, never a glob of `ATK\models`), `data_dir()` =
   `ATK\data\athanor\`, settings.
+- **The MoE perspective persona, pass by pass.** ATK's "MoE perspective"
+  methodology (not to be confused with an MoE model) answers in several
+  passes — perspectives, then a synthesis. Recorded, each pass is its own
+  recording, grouped as one session, so the Waterfall shows where each
+  perspective was sure and where the synthesis sided with one of them.
+- **Confidence on extracted entities.** ATK's extraction asks the model for
+  JSON; recorded, every value in it has the probabilities of the tokens that
+  spelled it. A person, a place or a date on the network graph can then
+  carry how sure the model was when it wrote it down — beside the existing
+  "model-generated" label, and useful for sorting a large graph by what to
+  check first. The recorder is the same; the new part is mapping a JSON
+  value's characters back to its steps (the recording's spans already do).
+- **Recordings as evidence.** ATK keeps a chain of custody (O.W.L.). A reply
+  recorded for the Waterfall can be entered in it: the recording's SHA-256
+  (already in its meta file), the model file's identity and the settings —
+  so what a model said, and what it was choosing between when it said it,
+  can later be shown not to have changed. On the analyst's click, not by
+  default.
+- **The Tap in ATK** (built 2026-09-29): the Waterfall page's box
+  "⚗ also record which experts the model uses" (`settings["lab"]
+  ["tap_experts"]`); `ReplyRecording(tap="experts")` installs the Tap
+  inside the engine's lock on the first recorded reply (never on a dense
+  model), unticking takes it out on a worker (`release_tap` →
+  `LLMEngine.run_on_model`, which waits for the engine's lock), and the
+  transcript's recording note says what the Tap did (`tap_note`).
+- **Calibrate the lens** (M30, not built): a button on a Lab page for the
+  loaded local model; a long job that yields the engine between batches;
+  Thorough's training phase borrows the card through `borrow_gpu` (unload
+  the chat model, train, restore). Greyed, with the reason, for an online
+  core.
+- **The Reader** (§4, not built): "What was it thinking here?" on a reply's
+  word in the Waterfall (T1); the workspace strip and the carrier band
+  beside it (T2, T3); the assessment (T9) as a panel a case can cite, with
+  the recording's hash for the chain of custody.
 - **Findings flow into ATK only when the analyst applies them**: an Override
   preset into a model profile, a measured usable context into Chat's
   compression threshold, a speed surface into the layer plan, a template
@@ -1270,6 +1929,21 @@ Athanor for ATK's sake.
    one question, cheap once S1 works, and it decides whether the whole
    programme is worth building. Then **M17 (the model's own dossier)**, the
    most immediately useful thing here for an analyst.
+7. **Recording retention.** A recording is about 2 KB per token plus its
+   meta file (a 1,000-token reply: a few MB). Keep everything, or keep the
+   newest N (or N days) and anything the analyst has noted or entered in
+   O.W.L.? Until decided: everything is kept.
+8. **The canary prompts** (M27) should be yours: which five prompts stand
+   for the work you actually do?
+9. **Calibration text** (M30): the model's own writing by default — and
+   which of your folders (documents, recorded chats), in which languages,
+   should a calibration read when you point it there?
+10. **PyTorch as an optional dependency** — for Thorough calibration and,
+    later, the Reader's trained parts on the card (BSD licence, so the rule
+    is met). Only when present; nothing needs it. Yes?
+11. **The Reader's write path** (T0) — sandbox-only, measurement-only,
+    never refusal-related (principle 9, as amended 2026-09-29). Confirm when
+    we resume.
 
 ## 8. Reading
 
@@ -1314,6 +1988,43 @@ Athanor for ATK's sake.
 - Gurnee et al., "Verbalizable Representations Form a Global Workspace in
   Language Models" (Anthropic, 2026) —
   transformer-circuits.pub/2026/workspace; for M19.
+- Jiang et al., "Mixtral of Experts" (2024), arXiv 2401.04088; Wang et al.,
+  "The Myth of Expert Specialization in MoEs: Why Routing Reflects
+  Geometry, Not Necessarily Domain Expertise" (2026), arXiv 2604.09780;
+  "The Expert Strikes Back: Interpreting Mixture-of-Experts Language Models
+  at Expert Level" (ICML 2026), arXiv 2604.02178. For M28.
+- Chen et al., "Persona Vectors: Monitoring and Controlling Character
+  Traits in Language Models" (Anthropic, 2025), arXiv 2507.21509. For M29.
+- Wendler et al., "Do Llamas Work in English? On the Latent Language of
+  Multilingual Transformers" (2024). For M31.
+- Abdelnabi et al., "Get my drift? Catching LLM Task Drift with Activation
+  Deltas" (2024), arXiv 2406.00799. For M32.
+- Azaria & Mitchell, "The Internal State of an LLM Knows When It's Lying"
+  (2023). For M33.
+- Lieberum et al., "Gemma Scope" (2024); He et al., "Llama Scope" (2024);
+  Ameisen et al., "Circuit Tracing: Revealing Computational Graphs in
+  Language Models" (Anthropic, 2025). For M34.
+- For the Reader: Ghandeharioun et al., "Patchscopes" (2024), arXiv
+  2401.06102; Chen et al., "SelfIE" (2024); Pan et al., "LatentQA" (2024),
+  arXiv 2412.08686; Karvonen, Marks et al., "Activation Oracles" (2025),
+  arXiv 2512.15674; Gurnee et al., "Verbalizable Representations Form a
+  Global Workspace in Language Models" (Anthropic, 2026); Pal et al.,
+  "Future Lens" (2023), arXiv 2311.04897; Lanham et al., "Measuring
+  Faithfulness in Chain-of-Thought Reasoning" (2023); Chen et al.,
+  "Reasoning Models Don't Always Say What They Think" (Anthropic, 2025),
+  arXiv 2505.05410; Bogdan et al., "Thought Anchors" (2025), arXiv
+  2506.19143; Lindsey, "Emergent Introspective Awareness in Large Language
+  Models" (Anthropic, 2025).
+- Kuhn, Gal & Farquhar, "Semantic Uncertainty" (2023); Farquhar et al.,
+  "Detecting hallucinations in large language models using semantic
+  entropy", Nature (2024); Kossen et al., "Semantic Entropy Probes" (2024),
+  arXiv 2406.15927. For M25.
+- Lanham et al., "Measuring Faithfulness in Chain-of-Thought Reasoning"
+  (2023); "Dynamic Early Exit in Reasoning Models" (DEER,
+  2025), arXiv 2504.15895; "Answer Convergence as a Signal for Early
+  Stopping in Reasoning" (2025), arXiv 2506.02536. For M26.
+- Liu et al., "KIVI: A Tuning-Free Asymmetric 2bit Quantization for KV
+  Cache" (2024). For 3.13.
 - Zheng et al., "Broken Tokens? Your Language Model can Secretly Handle
   Non-Canonical Tokenizations" (2025), arXiv 2506.19004; Singh & Strouse,
   "Tokenization counts: the impact of tokenization on arithmetic in

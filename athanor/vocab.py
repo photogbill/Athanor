@@ -25,13 +25,20 @@ class LlamaUnavailable(RuntimeError):
     """llama-cpp-python is not installed or its library would not load."""
 
 
-class VocabLoadError(RuntimeError):
-    def __init__(self, path, log):
+class ModelLoadError(RuntimeError):
+    """llama.cpp refused a file; ``log`` holds everything it said."""
+
+    def __init__(self, path, log, what: str = "the model"):
         self.path = str(path)
         self.log = log
         tail = "".join(t for _lvl, t in log[-8:]).strip()
-        super().__init__(f"llama.cpp could not load the vocabulary of {Path(path).name}"
+        super().__init__(f"llama.cpp could not load {what} {Path(path).name}"
                          + (f":\n{tail}" if tail else " (it printed nothing)"))
+
+
+class VocabLoadError(ModelLoadError):
+    def __init__(self, path, log):
+        super().__init__(path, log, what="the vocabulary of")
 
 
 VOCAB_TYPES = {0: "none", 1: "SPM", 2: "BPE", 3: "WPM", 4: "UGM", 5: "RWKV",

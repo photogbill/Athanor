@@ -6,8 +6,8 @@ hardware and your own material, with every result recorded so it can be
 reproduced.
 
 Athanor works on **GGUF** models through llama.cpp itself. It stands on its
-own: a Python library, a command line (`python -m athanor`) and, soon, a set
-of Qt widgets. It is built to be put inside other programs. The **Analyst
+own: a Python library, a command line (`python -m athanor`) and a set of Qt
+widgets. It is built to be put inside other programs. The **Analyst
 Toolkit (ATK)** is its first host, where it appears as the experimental Model
 Lab workspace, but nothing in Athanor needs ATK.
 
@@ -15,9 +15,29 @@ Lab workspace, but nothing in Athanor needs ATK.
 for days so that long, patient work could go on inside it. Named by Bill and
 Claude together, 2026-09-27.*
 
-## Status — 0.1, Phase 1: the file
+## Status — 0.3: the file, the Waterfall, and the Tap
 
-These work now, without loading any weights:
+**The Waterfall** records every token a model writes, with everything it
+was choosing between at that moment, and plays it back: the reply along
+the top, time down the screen, the candidates across, the token actually
+taken highlighted on every row, and the moments the model hesitated one
+key away. Recorded live from a model your program already has loaded,
+without changing a single token of the reply.
+
+**The Tap** copies the model's own tensors out while llama.cpp computes
+them, beside every token: which experts a mixture-of-experts model used
+at every layer (the **expert map**, shown next to the Waterfall), each
+layer's output, the final norm, the logits. It reads and never writes;
+`athanor tap probe` checks, on your machine and your card, that it
+changes nothing and what it costs.
+
+```text
+python -m athanor record my-model.gguf --prompt "Describe the relay plan." --tap experts
+python -m athanor tap probe my-model.gguf
+python -m athanor.gui
+```
+
+And, without loading any weights:
 
 | tab | question |
 |---|---|
@@ -29,8 +49,8 @@ These work now, without loading any weights:
 All four come with the **notebook** (every run recorded), a **log** of
 everything that happened (llama.cpp's own messages included, and a crash
 log if something native fails), and a JSON interface for other programs. The plan for everything else is
-[ATHANOR_PLAN.md](ATHANOR_PLAN.md): the Waterfall, retrieval by thought, and
-the Mad Science Wing.
+[ATHANOR_PLAN.md](ATHANOR_PLAN.md): the rest of the behaviour tabs,
+retrieval by thought, and the Mad Science Wing.
 
 ```text
 python -m athanor capabilities
@@ -42,15 +62,14 @@ python -m athanor template chatml --model my-model.gguf
 Five minutes: [docs/QUICKSTART.md](docs/QUICKSTART.md). Using it from your
 own program: [docs/INTEGRATING.md](docs/INTEGRATING.md).
 
-## The flagship, coming next: the Waterfall
+## Next: branching, and depth
 
-An RF waterfall, pointed at a model. Time runs down the screen, the
-vocabulary runs across it, and colour is probability. Every token the model
-writes is one line: the whole distribution it was choosing from at that
-moment. A reply becomes a recording you can scrub back and forth through,
-like an I/Q capture. You can step through it, bookmark the moment the model
-changed its mind, rewind to any token and branch down a road it didn't take,
-or stack several answers to the same question and watch where they part.
+The Waterfall is an RF waterfall pointed at a model: time down the screen,
+the candidates across, colour for probability, a reply you can scrub like
+an I/Q capture. Next, rewinding to any token and branching down a road the
+model didn't take, and stacking several answers to the same question to
+watch where they part. With the Tap, the logit lens at every step: the
+layer at which each token was decided.
 
 ## The rules it keeps
 
@@ -77,6 +96,9 @@ athanor/          the engine (no Qt, no ATK)
   vocab.py        llama.cpp's tokenizer, vocab-only
   templates/      llama.cpp's 55 chat templates as Jinja, and rendering
   tabs/           Inspect, Tokenize, Compare, Template
+  waterfall/      the recorder, the recording format, reading it back
+  tap/            the Tap: ggml read from Python, and the probe
+  gui/            the Qt widgets: the player, the expert map (optional)
   notebook.py     the record
   log.py          what happened, kept to learn from
   host.py         the port a host application fills

@@ -141,3 +141,55 @@ class TempDir:
 
     def __exit__(self, *exc):
         self._t.cleanup()
+
+
+def tiny_runnable_model(path, *, seed: int = 1, n_embd: int = 64, n_layers: int = 2,
+                        template: str | None = None) -> Path:
+    """A small llama-architecture model with random weights that llama.cpp
+    really runs — written by Athanor's own writer, with the llama-spm test
+    vocabulary (32,000 tokens). Its words are nonsense; its logits are real,
+    which is all the Waterfall's tests need. About 9 MB, a fraction of a
+    second to write."""
+    from athanor import gguf
+    src = gguf.read(VOCABS["llama-spm"])
+    n_vocab = len(src.get("tokenizer.ggml.tokens"))
+    E, H, HKV, FF = n_embd, 4, 2, 2 * n_embd
+    rng = np.random.default_rng(seed)
+    w = GGUFWriter()
+    w.add("general.architecture", "llama")
+    w.add("general.name", "Athanor tiny test model")
+    w.add("general.file_type", 0, ValueType.UINT32)
+    for key, value in (("context_length", 512), ("embedding_length", E),
+                       ("block_count", n_layers), ("feed_forward_length", FF),
+                       ("attention.head_count", H), ("attention.head_count_kv", HKV),
+                       ("rope.dimension_count", E // H)):
+        w.add(f"llama.{key}", value, ValueType.UINT32)
+    w.add("llama.attention.layer_norm_rms_epsilon", 1e-5, ValueType.FLOAT32)
+    for kv in src.kvs:
+        if kv.key.startswith("tokenizer."):
+            if isinstance(kv.value, Array):
+                w.add(kv.key, kv.value.items, ValueType.ARRAY, kv.value.elem_type)
+            else:
+                w.add(kv.key, kv.value, kv.type)
+    w.add("tokenizer.chat_template", template or (
+        "{% for m in messages %}<|{{ m['role'] }}|>{{ m['content'] }}\n{% endfor %}"
+        "{% if add_generation_prompt %}<|assistant|>{% endif %}"))
+
+    def rand(name, shape, scale):
+        w.add_tensor(name, shape, GGMLType.F32,
+                     (rng.standard_normal(tuple(reversed(shape))) * scale).astype(np.float32))
+
+    ones = np.ones(E, np.float32)
+    rand("token_embd.weight", (E, n_vocab), 1.0)
+    w.add_tensor("output_norm.weight", (E,), GGMLType.F32, ones)
+    for i in range(n_layers):
+        w.add_tensor(f"blk.{i}.attn_norm.weight", (E,), GGMLType.F32, ones)
+        w.add_tensor(f"blk.{i}.ffn_norm.weight", (E,), GGMLType.F32, ones)
+        rand(f"blk.{i}.attn_q.weight", (E, E), 0.2)
+        rand(f"blk.{i}.attn_k.weight", (E, E * HKV // H), 0.2)
+        rand(f"blk.{i}.attn_v.weight", (E, E * HKV // H), 0.2)
+        rand(f"blk.{i}.attn_output.weight", (E, E), 0.2)
+        rand(f"blk.{i}.ffn_gate.weight", (E, FF), 0.2)
+        rand(f"blk.{i}.ffn_up.weight", (E, FF), 0.2)
+        rand(f"blk.{i}.ffn_down.weight", (FF, E), 0.2)
+    return w.write_file(path)

@@ -4,11 +4,15 @@ Athanor is built to be put inside other software. Nothing in it needs the
 Analyst Toolkit (ATK) or any other host: ATK is simply its first user, and
 uses only what is described here.
 
-This guide covers Athanor **0.1** (Phase 1: the file tabs — Inspect,
-Tokenize, Compare and Template). Every Python example in it runs in the test
+This guide covers Athanor **0.3**: the file tabs (Inspect, Tokenize,
+Compare, Template), the Waterfall, which records a model's choices token
+by token and plays them back, and the Tap, which copies a model's own
+tensors out as it computes — which experts a mixture-of-experts model used,
+each layer's output — beside every token. Every Python example in it runs in the test
 suite (`tests/test_docs.py`), so the examples cannot drift from the code. In
-them, `MODEL` and `MODEL_B` are paths to GGUF files and `DATA_DIR` is a
-scratch folder.
+them, `MODEL` and `MODEL_B` are paths to GGUF files, `RUNNABLE_MODEL` is a
+GGUF with weights (a tiny one, in the tests), and `DATA_DIR` is a scratch
+folder.
 
 **Contents**
 
@@ -22,6 +26,7 @@ scratch folder.
 8. [Threads, versions and the promise](#8-threads-versions-and-the-promise)
 9. [When something is missing](#9-when-something-is-missing)
 10. [The log](#10-the-log)
+11. [The Waterfall player (Qt)](#11-the-waterfall-player-qt)
 
 ---
 
@@ -33,11 +38,11 @@ There are five ways in. Use as many or as few as you need:
 |---|---|---|
 | the Python API, `athanor.api` | Python programs | **0.1** |
 | the command line, `python -m athanor … --json` | programs in any language | **0.1** |
-| open file formats (`docs/formats/`) | reading Athanor's output with no Athanor | **0.1** (notebook, results); recordings arrive with the Waterfall |
+| open file formats (`docs/formats/`) | reading Athanor's output with no Athanor | **0.1** (notebook, results); **0.2** recordings |
 | the host port, `athanor.host` | an application lending its GPU, folders and data folder | **0.1** |
-| Qt widgets, `athanor.gui` | PySide6 applications | next |
+| Qt widgets, `athanor.gui` | PySide6 applications | **0.2**: the Waterfall player; **0.3**: the expert map |
 
-What Athanor does in 0.1, all without loading a model's weights:
+What Athanor does without loading a model's weights:
 
 * **Inspect**: a GGUF's anatomy (every figure labelled), its tokenizer as
   the header declares it and as llama.cpp actually loads it, and health
@@ -53,6 +58,20 @@ What Athanor does in 0.1, all without loading a model's weights:
   also gives a vocabulary-overlap matrix across a library.
 * **Template**: any of llama.cpp's 55 chat formats, a model's own, a file
   or Jinja text, rendered and seen through the model's tokenizer.
+
+And with a model loaded:
+
+* **The Waterfall**: every token a model writes, recorded with the
+  distribution it was chosen from — the 256 most probable tokens, the
+  entropy, where the chosen one ranked, and when. Recorded live from a
+  `llama_cpp.Llama` your program already has, without changing a single
+  token it generates, and played back in a Qt widget: the reply along the
+  top, time down the screen, candidates across.
+* **The Tap**: the model's own tensors, copied out while llama.cpp computes
+  them — for a mixture-of-experts model, which experts every layer used for
+  every token; for any model, each layer's output (what the logit lens
+  reads). Recorded beside the Waterfall, bit-for-bit without changing the
+  reply on the machines tested so far, and `athanor tap probe` checks yours.
 
 ## 2. Installing
 
@@ -239,6 +258,227 @@ print(nb.get(run)["question"], len(nb.runs()))
 
 Leave out `notebook=` and the host's data folder is used (§6).
 
+### Record a generation: the Waterfall
+
+If your program already has a `llama_cpp.Llama`, attach the recorder to it
+around the call that generates. Nothing about the generation changes: the
+recorder reads the logits llama.cpp sampled from, after the sampler has
+picked, and the same seed gives the same reply, recorded or not.
+
+```python
+# needs: llama
+import llama_cpp
+from athanor import api
+
+llm = llama_cpp.Llama(RUNNABLE_MODEL, n_ctx=512, verbose=False)
+messages = [{"role": "user", "content": "Name a colour."}]
+with api.attach_recorder(llm, meta={"settings": {"temperature": 0.7}}) as rec:
+    out = llm.create_chat_completion(messages, max_tokens=16, temperature=0.7, seed=1)
+reply = out["choices"][0]
+path = rec.save(DATA_DIR / "recordings", finish_reason=reply["finish_reason"],
+                host_reply=reply["message"]["content"])
+
+r = api.read_recording(path)
+print(r.n_steps, r.text)
+first = r.chosen(0)                        # the token, its rank, p, entropy, time
+for c in r.candidates(0, 5):               # what it was chosen from
+    print(("▶" if c["chosen"] else " "), f"{c['p']:.1%}", repr(c["piece"]))
+```
+
+* **Streaming.** With `stream=True`, consume the stream *inside* the
+  `with` block: the tokens are sampled as you iterate, and the recorder is
+  only attached while the block is open.
+* **Keep the model loaded until the `with` block ends.** On leaving, the
+  recorder looks up the text of every token it saw, using the model's
+  vocabulary. `save()` needs nothing from the model and can run anywhere.
+* **Your own lock.** Attach inside whatever lock your program already holds
+  around generation. The recorder wraps that one instance's `sample` for the
+  length of the block and puts it back afterwards, even on an exception.
+* **Cost.** Well under a millisecond per token on a 32k vocabulary, around
+  0.7 ms on a 131k one, measured and written into each recording
+  (`timing.overhead_ms_per_step`).
+* **If the recorder fails**, the recording stops and says why (`error`);
+  the generation carries on. `api.recorder_check(llm)` says in advance
+  whether a binding and model can be recorded (`None` means yes).
+* **Without a host model**, `api.record_once(path, messages=…)` loads the
+  file (holding `borrow_gpu`), generates once, saves, and returns the
+  summary. That is what `athanor record` runs.
+* **One reply in several parts.** A reply your program carries on after it
+  hit its length limit is still one reply: pass the first recorder back in,
+  `api.attach_recorder(llm, recorder=rec)`, around each later part. The
+  recording marks where each part began (a `segment` annotation).
+* **Moments of doubt.** `r.doubts()` lists the steps where the sampler took
+  something other than the model's favourite, or where even the token taken
+  had less than half the probability — where to look first. The player
+  jumps between them, and underlines them in the reply.
+
+A host does not have to keep a recording's pieces together itself. ATK's
+Chat, for example, makes one small session object per recorded reply, hands
+the engine a callable that enters `attach_recorder` inside the engine's own
+lock around every part, and saves on a worker thread when the reply ends —
+one small class, `ReplyRecording` in ATK's `atk/core/lab_host.py`.
+
+### Play a recording: the widgets
+
+`athanor.gui` (PySide6; `pip install athanor[gui]`) is the player a person
+looks at. `WaterfallPanel` is a folder's recordings beside the player — the
+whole Waterfall tab, as one widget; `WaterfallPlayer` is the player alone.
+
+```python
+# needs: qt
+from PySide6.QtWidgets import QApplication
+from athanor.gui import WaterfallPanel
+
+app = QApplication.instance() or QApplication([])
+panel = WaterfallPanel(DATA_DIR / "recordings")    # the list beside the player
+# your_layout.addWidget(panel), and when your program has made a recording:
+#     panel.open(path)
+```
+
+What it shows, so your users can be told:
+
+* **the reply along the top**, the token at the cursor lit, what is still to
+  come dimmed (or hidden, to watch it written), the words the model was
+  unsure of underlined; hover a word for how sure it was;
+* **the waterfall**: time runs down, one row per token; the candidates run
+  across, the model's favourite first, brightness their probability in dB
+  (0 dB is certain, −10 dB is 10 %); the entropy of each step at the right;
+* **"taken"**, the column at the left of every row: the token the model
+  actually wrote, whatever its rank — framed white when it was the model's
+  favourite, amber with its rank when the sampler took another;
+* **Aa read** zooms in until each cell shows its candidate's text, so a row
+  reads as the words the model weighed; press again for the heat-map
+  overview;
+* **the transport**: play at the recorded speed or faster, step, scrub, and
+  ◆ to jump between moments of doubt (`[` and `]` from the keyboard).
+
+`python -m athanor.gui [recording or folder]` opens the same thing in a
+window of its own.
+
+When a recording carries the Tap's `experts`, the player shows the
+**expert map** beside the candidates: layers down, experts across,
+brightness the router's score for each expert at the token under the
+cursor (in dB, like the waterfall), the experts used framed in amber with
+how much each counted. It can also show how often each expert was used over
+the whole reply (or its thinking, or its answer), or one layer **over
+time** — a second waterfall, tokens down, that layer's experts across,
+scrolling with the cursor; click a row to move it. `ExpertPanel` is the
+same thing on its own.
+
+`api.list_recordings(folder)` lists a folder, newest first;
+`api.recordings_folder()` is `<data_dir>/recordings`. The format is in
+[`formats/recording.md`](formats/recording.md).
+
+### Look inside: the Tap
+
+llama.cpp computes a graph of named tensors for every token — `l_out-12`
+is layer 12's output, `ffn_moe_topk-12` the experts layer 12's router
+chose, `result_output` the logits. The Tap copies the ones you name while
+llama.cpp computes them, from whichever device holds them. It never writes
+into the model.
+
+The callback it uses is fixed when a context is made, so a model is made
+**tappable** once: `make_tappable` rebuilds the `Llama`'s context with the
+Tap's dispatcher in it — same parameters, weights shared and untouched, an
+empty cache (the next generation reads its prompt again). Do it right after
+loading, while nothing is generating.
+
+```python
+# needs: llama
+import llama_cpp
+from athanor import tap
+
+llm = llama_cpp.Llama(RUNNABLE_MODEL, n_ctx=512, verbose=False)
+tap.make_tappable(llm)                     # once; tap.is_tappable(llm) is now True
+with tap.capture(llm, ("l_out-*", "result_output")) as t:
+    llm.create_completion("The river", max_tokens=4, temperature=0)
+first = t.decodes[0]                       # one entry per forward pass
+print(first["n_tokens"], sorted(first["tensors"])[:3])
+logits = first["tensors"]["result_output"][0]   # [rows, values]: the prompt's last token
+print(logits.shape)
+```
+
+* **What to name.** Glob patterns over llama.cpp's tensor names, or a
+  preset: `"experts"` (`ffn_moe_topk-*`, `ffn_moe_weights-*`,
+  `ffn_moe_probs-*`), `"residual"` (`l_out-*`), `"logits"`
+  (`result_output`). `*` never crosses a space, so `l_out-*` does not take
+  llama.cpp's derived `l_out-3 (view)`. `tap.tensor_names(llm)` (or
+  `athanor tap names MODEL`) lists every tensor one forward pass computes.
+* **Rows.** By default (`rows="outputs"`) each forward pass keeps the rows
+  that produce logits — one per generated token. `rows="all"` keeps every
+  token of the prompt too (large: a prompt's worth of each tensor). The
+  last layer only ever has output rows: llama.cpp drops the rest there.
+* **Memory.** `capture` keeps every forward pass, up to `limit_bytes`
+  (1 GiB by default); past it the Tap stops and says so (`t.error`).
+  `tap.watching(llm, tap.Tap(...))` keeps only the latest pass, which is
+  what a recording needs.
+* **Cost.** While a model is tappable, every forward pass makes one Python
+  call per graph node (about 30 per layer) even when nothing is being
+  copied; while copying, llama.cpp computes the graph in pieces so each
+  wanted tensor can be read. `tap.make_plain(llm)` takes the Tap out again.
+* **Failures** inside the Tap are kept (`t.error`) and never reach
+  llama.cpp; the generation carries on.
+
+With the Waterfall, name the Tap's streams when attaching, and every
+recorded token carries the rows of the forward pass that produced it — for
+a mixture-of-experts model, the **expert map**:
+
+```python
+# needs: llama
+import llama_cpp
+from athanor import api, tap
+
+moe = api.tiny_model(DATA_DIR / "moe.gguf", n_experts=8, n_experts_used=2)
+llm = llama_cpp.Llama(str(moe), n_ctx=512, verbose=False)
+tap.make_tappable(llm)
+with api.attach_recorder(llm, tap="experts") as rec:
+    llm.create_completion("the radio signal", max_tokens=8, temperature=0)
+r = api.read_recording(rec.save(DATA_DIR / "recordings"))
+ex = r.tap.experts()                       # None for a model without experts
+print(ex.ids.shape)                        # [tokens, layers, experts used per token]
+print(ex.share()[0, 0])                    # how much each counted, first token, layer 0
+print(ex.usage().shape)                    # [layers, experts]: how often each was used
+```
+
+* A model that is not tappable is recorded without the Tap, and the
+  recording says why (`r.tap_info["unavailable"]`); so does a Tap that
+  failed or stopped at its limit (`error`, `stopped_at`). The Tap's
+  failures never cost the recording.
+* `r.tap.stream("l_out-12")` is one stream, `[tokens, values]`;
+  `r.tap.stacked("l_out")` stacks every layer's, `[tokens, layers, values]`.
+* `ExpertRouting` (`r.tap.experts()`): `ids` (the experts used), `weights`
+  (the router's value for each), `probs` (its value for every expert),
+  `share()` (how much each used expert counted, summing to 1), `usage()`
+  and `grid(step)`.
+* Experts are not personas. The map shows which parts of the network the
+  router used; what they are for is what it lets you ask.
+
+**Does it work here, and what does it cost?** That depends on the build and
+the card, so Athanor measures it rather than promising:
+
+```python
+# needs: llama
+import llama_cpp
+from athanor import api
+
+llm = llama_cpp.Llama(RUNNABLE_MODEL, n_ctx=512, verbose=False)
+report = api.tap_probe(llm, tokens=6)      # leaves llm's own context alone
+print(report["verdict"])
+print(report["exactness"]["idle_vs_plain_max_abs"], report["ms_per_token"])
+```
+
+The probe makes a plain context and a tapped one on the same loaded
+weights, generates the same greedy continuation in each, and reports:
+whether tapping changed any logit (0 means bit-identical), whether the
+Tap's copy of `result_output` is exactly llama.cpp's logits, whether the
+logit lens (the last layer's output through the final norm and the output
+matrix, done by Athanor) reproduces them, milliseconds per token plain,
+tapped-idle and copying each preset, and, for a mixture-of-experts model,
+whether the experts used were the router's top-scoring ones. On a GPU,
+computing the graph in pieces can stop the backend fusing some kernels,
+which may change the last bits; the probe is how to find out.
+`athanor tap probe MODEL` runs it from the command line.
+
 ## 4. The command line, with `--json`
 
 Every command prints a readable report. With `--json` it prints the same
@@ -256,6 +496,11 @@ parse the output.
 | `athanor template [SPEC] [--model M] [--vs SPEC2] [--conversation FILE] [--no-gen] [--list] [--strict]` | Template |
 | `athanor roundtrip MODEL [--whole]` | does Athanor's writer reproduce this file? |
 | `athanor notebook list\|show ID\|note ID TEXT\|where` | the record |
+| `athanor record MODEL (--prompt T [--system S] \| --messages FILE \| --raw --prompt T) [--max-tokens N] [--temperature T] [--top-k/--top-p/--min-p/--repeat-penalty] [--seed N] [--n-ctx N] [--gpu-layers N] [--k N] [--out DIR] [--tap experts\|residual\|logits\|PATTERN]…` | the Waterfall: generate once, recorded (with the Tap, if asked) |
+| `athanor tap probe MODEL [--tokens N] [--n-ctx N] [--gpu-layers N]` | the Tap on this machine: does it change anything, does it read the truth, what does it cost |
+| `athanor tap names MODEL` | every tensor one forward pass computes — what the Tap can read |
+| `athanor recording PATH [--step N] [--top N] [--forks N] [--verify]` | read a recording: the text, where the favourite was not taken, one step's candidates |
+| `athanor recordings [FOLDER]` | list recordings |
 | `athanor version` | versions |
 
 `athanor` is installed as a command, and `python -m athanor` works
@@ -274,8 +519,8 @@ Athanor reads. Text that starts with a dash goes as `--text="-…"`.
 | 0 | ran; any findings are in the report |
 | 1 | ran, `--strict` was given, and there were `problem` findings; or `roundtrip` found a file that does not round-trip |
 | 2 | usage error |
-| 3 | an input file is missing or is not a GGUF Athanor can read |
-| 4 | llama.cpp (llama-cpp-python) is needed and not available (`tokenize`, `splits`). `inspect` and `template` still answer without it, with those checks marked `skipped` |
+| 3 | an input file is missing, is not a GGUF Athanor can read, or llama.cpp refused to load it; or a recording is missing or damaged |
+| 4 | llama.cpp (llama-cpp-python) is needed and not available (`tokenize`, `splits`, `record`, `tap`), or the Tap cannot run here. `inspect` and `template` still answer without it, with those checks marked `skipped` |
 | 5 | anything else (the message says what; set `ATHANOR_DEBUG=1` for a traceback) |
 
 From another language:
@@ -304,8 +549,10 @@ importing Athanor:
   append-only.
 * [`formats/results.md`](formats/results.md): the result of every command
   (what `--json` prints and what the notebook stores).
-* Recordings (`.athrec-meta` / `.athrec-data`) arrive with the Waterfall in
-  Phase 2, specified the same way.
+* [`formats/recording.md`](formats/recording.md): Waterfall recordings,
+  `.athrec-meta` (JSON) beside `.athrec-data` (fixed-size binary records),
+  and `.athrec-tap` when the Tap recorded too. Laid out like SigMF,
+  readable with numpy alone.
 
 ## 6. Writing a host
 
@@ -339,10 +586,11 @@ default. It uses `ATHANOR_DATA` (or the per-user data folder:
 `%LOCALAPPDATA%\Athanor` on Windows, `~/.local/share/athanor` on Linux) and
 `ATHANOR_MODELS` (folders, separated by `os.pathsep`).
 
-In 0.1 nothing loads weights, so `borrow_gpu` is not yet called. It is in
-the port now so hosts are written against its final shape. ATK's
-`lab_host.py` will be the full-size example: its AI-queue ticket, unloading
-its own model and restoring it afterwards.
+`borrow_gpu` is held around anything that loads weights: in 0.2, only
+`record_once` (and so `athanor record`). A host that records its own
+already-loaded model with `attach_recorder` loads nothing, so nothing is
+borrowed. ATK is the full-size example: it records the model its chat is
+already running.
 
 ## 7. Reading results: labels and findings
 
@@ -386,8 +634,17 @@ programs.
 * **LlamaUnavailable** (exit 4) means llama-cpp-python is not importable in
   this Python. The header-only parts still work: `inspect --no-llama`,
   `compare`, `overlap`, `template` without `--model`, and `roundtrip`.
-* **VocabLoadError** means llama.cpp refused the file. The exception carries
-  llama.cpp's own last lines, the only place the reason is written.
+* **VocabLoadError** (and, when loading weights, **ModelLoadError**) means
+  llama.cpp refused the file. The exception carries llama.cpp's own last
+  lines, the only place the reason is written.
+* **RecorderUnavailable** means this binding, or this object, cannot be
+  recorded; the message says which part is missing. `athanor capabilities`
+  lists it under `recording`.
+* **TapUnavailable** (exit 4) means the Tap cannot run: the binding lacks
+  the evaluation callback, ggml's library is not beside it, or ggml's
+  tensor layout is not the one Athanor checks for (a newer ggml that moved
+  a field turns the Tap off rather than reading the wrong bytes).
+  `athanor capabilities` lists it under `eval_callback`.
 * **"decoding … rows needs gguf-py"**: `pip install gguf` for K-quant and
   i-quant lineage checks.
 * **The process died.** Look in the log folder (§10). `crash-<date>.log`
