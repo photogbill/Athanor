@@ -231,6 +231,38 @@ def cmd_capabilities(args):
     return EXIT_OK
 
 
+_DATA_RULES = {
+    "ATHANOR_DATA": "ATHANOR_DATA is set (or --data was given)",
+    "checkout": "Athanor runs from a source checkout, so its data stays beside its code",
+    "per-user": "Athanor is installed as a package and was told nothing: the platform's "
+                "per-user folder (set ATHANOR_DATA or pass --data to choose)",
+}
+
+
+def cmd_data(args):
+    """Where Athanor writes — recordings, the notebook, the lens cache, the log — and why."""
+    from .host import NullHost, data_dir_choice, get_host, source_checkout
+    args.record = False
+    host = get_host()
+    if isinstance(host, NullHost):
+        path, how = data_dir_choice()
+    else:
+        path, how = Path(host.data_dir()), "host"
+    r = {"path": str(path), "exists": path.is_dir(), "chosen_by": how,
+         "rule": _DATA_RULES.get(how, "the host application's own data folder"),
+         "checkout": str(source_checkout()) if source_checkout() else None,
+         "folders": {"recordings": str(path / "recordings"), "lenses": str(path / "lenses"),
+                     "notebook": str(path / "notebook"), "logs": str(path / "logs")}}
+
+    def human(r):
+        print(f"{r['path']}" + ("" if r["exists"] else "  (not made yet)"))
+        print(f"  because {r['rule']}")
+        for k, v in r["folders"].items():
+            print(f"  {k:11s} {v}")
+    _out(args, r, human)
+    return EXIT_OK
+
+
 def cmd_inspect(args):
     from .tabs.inspect import inspect, metadata
     if args.metadata:
@@ -374,6 +406,15 @@ def _human_recording(r):
                 print(f"  ! the Tap: {tap[key]}")
         if tap.get("stopped_at") is not None:
             print(f"  ! the Tap stopped at step {tap['stopped_at']}")
+    lens = r.get("lens")
+    if lens:
+        if lens.get("error"):
+            print(f"  ! the lens: {lens['error']}")
+        else:
+            d = lens.get("depth") or {}
+            print(f"  the lens ({lens.get('kind')}, {lens.get('layers')} layers, {lens.get('label')}): "
+                  f"median decision depth layer {d.get('median')}, "
+                  f"{d.get('at_last_layer')} tokens decided only at the top — athanor lens for more")
     text = r.get("text") or ""
     print("\n" + (text if len(text) <= 2000 else text[:2000] + " …"))
     forks = r.get("forks")
@@ -422,12 +463,29 @@ def cmd_record(args):
             raise ValueError("record needs --prompt, or --messages FILE")
         messages = ([{"role": "system", "content": args.system}] if args.system else []) + [
             {"role": "user", "content": args.prompt}]
+    taps = list(args.tap or [])
+    if args.lens and "residual" not in taps and not any(t.startswith("l_out") for t in taps):
+        taps.append("residual")
     r = record_once(args.model, messages=messages, prompt=prompt, max_tokens=args.max_tokens,
                     temperature=args.temperature, top_k=args.top_k, top_p=args.top_p,
                     min_p=args.min_p, repeat_penalty=args.repeat_penalty, seed=args.seed,
                     n_ctx=args.n_ctx, gpu_layers=args.gpu_layers, k=args.k, folder=args.out,
-                    tap=args.tap or None)
+                    tap=taps or None)
     r["kind"] = "record"
+    if args.lens:
+        from . import lens as L
+        from .lens import LensUnavailable
+        try:
+            r["lens_run"] = L.run(r["path"], model_path=args.model, k=args.lens_k)
+        except LensUnavailable as exc:        # the recording stands; say why the lens did not
+            r["lens_run"] = {"error": str(exc)}
+            if not args.json:
+                print(f"the lens could not be run: {exc}", file=sys.stderr)
+        r["lens"] = r["lens_run"] if "error" in r["lens_run"] else {
+            k2: r["lens_run"].get(k2) for k2 in ("lens_kind", "label", "k", "depth", "check", "notes")}
+        if isinstance(r["lens"], dict) and "lens_kind" in r["lens"]:
+            r["lens"]["kind"] = r["lens"].pop("lens_kind")
+            r["lens"]["layers"] = len(r["lens_run"].get("layers") or [])
     _out(args, r, _human_recording)
     return EXIT_OK
 
@@ -572,6 +630,143 @@ def cmd_recordings(args):
     return EXIT_OK
 
 
+_BARS = "▁▂▃▄▅▆▇█"
+
+
+def _strip(values, width: int | None = None) -> str:
+    """A row of block characters, tallest = the largest value."""
+    vals = [0.0 if v is None or not (v == v) else float(v) for v in values]
+    top = max(vals) if vals else 0.0
+    if top <= 0:
+        return "▁" * len(vals)
+    return "".join(_BARS[min(7, int(round(7 * v / top)))] for v in vals)
+
+
+def _human_lens(r):
+    m = r.get("model") or {}
+    u = r.get("unembedding") or {}
+    layers = r.get("layers") or []
+    print(f"{r.get('recording') or r.get('path')}")
+    print(f"  model: {m.get('name') or m.get('path') or '?'}"
+          + (f" — {u['n_embd']} wide, {u['n_vocab']:,} tokens" if u.get("n_embd") else ""))
+    if u:
+        o, nm = u.get("output") or {}, u.get("norm") or {}
+        eps = nm.get("eps")
+        eps_s = f"{eps:g}" if isinstance(eps, (int, float)) else str(eps)
+        print(f"  unembedding: {o.get('tensor')} ({o.get('type')}{', tied' if o.get('tied') else ''})"
+              f" through {nm.get('tensor')} ({nm.get('kind')}, eps {eps_s})"
+              + (f"; soft-capped at {o['softcap']}" if o.get("softcap") else "")
+              + (f"; decoded in {u['decode_seconds']} s" if u.get("decode_seconds") else "")
+              + (f"\n    cached at {u['cache']}" if u.get("cache") else ""))
+    if layers:
+        rng = f"{layers[0]}–{layers[-1]}" if len(layers) > 1 else str(layers[0])
+        sec = r.get("seconds")
+        print(f"  lens: {r.get('lens_kind') or r.get('kind')} lens over {len(layers)} layers "
+              f"({rng}), {r.get('n_steps')} steps, k {r.get('k')}"
+              + (f", {sec:.1f} s ({1000 * sec / max(r.get('n_steps') or 1, 1):.0f} ms a step)"
+                 if sec else "") + f"   {r.get('label')}")
+    c = r.get("check") or {}
+    if c.get("made"):
+        err = c.get("max_abs_logprob_error")
+        print(f"  check at the top: the favourite agrees at {c.get('favourite_agrees')} of "
+              f"{c.get('steps_compared')} steps"
+              + (f"; log-probabilities within {err:.3g} (mean {c.get('mean_abs_logprob_error'):.3g}) "
+                 "nats of the recording's" if err is not None else "")
+              + ("" if c.get("reproduces") else "  ← does NOT reproduce the model's output"))
+    elif c:
+        print(f"  check at the top: not made — {c.get('why_not')}")
+    d = r.get("depth") or {}
+    if layers and d:
+        print("  decision depth — the first layer from which the favourite stays the lens's answer:")
+        med = d.get("median")
+        print(f"    median layer {med:.0f} of {layers[-1]}, mean {d.get('mean'):.1f}; "
+              f"{d.get('at_last_layer')} tokens decided only at the top; "
+              f"{d.get('undecided')} undecided" if med is not None else
+              "    no token's depth could be read")
+        hist = d.get("histogram") or []
+        if hist:
+            print(f"    layer {layers[0]:>3} {_strip(hist)} {layers[-1]}   (tokens decided at each layer)")
+    agree = r.get("agreement_by_layer") or []
+    if agree:
+        print("  how far each layer can be read (its answer is already the final favourite):")
+        print(f"    layer {layers[0]:>3} {_strip(agree)} {layers[-1]}")
+        picks = sorted({0, len(agree) - 1} | set(range(0, len(agree), max(1, len(agree) // 6))))
+        print("    " + "  ".join(f"L{layers[i]} {100 * (agree[i] or 0):.0f}%" for i in picks))
+    tokens = r.get("tokens")
+    if tokens:
+        shown = " ".join(f"{t['piece']!r}·{t['depth'] if t['depth'] >= 0 else '?'}" for t in tokens)
+        print(f"\n  the reply, each token with the layer it was decided at:\n    {shown}")
+    col = r.get("column")
+    if col:
+        st = r.get("step") or {}
+        print(f"\n  step {st.get('step')}: chose {st.get('piece')!r} (the favourite was "
+              f"{st.get('favourite')!r} at {100 * (st.get('favourite_p') or 0):.1f}%)")
+        print(f"    {'layer':>5}  {'fav rank':>8}  {'entropy':>8}  what the layer would say")
+        for row in col:
+            cands = "  ".join(f"{c['piece']!r} {100 * c['p']:.1f}%" for c in row["candidates"])
+            ent = f"{row['entropy_bits']:.1f} b" if row.get("entropy_bits") is not None else "?"
+            print(f"    {row['layer']:>5}  {row['fav_rank']:>8}  {ent:>8}  {cands}")
+    for n in r.get("notes") or []:
+        print(f"  · {n}")
+
+
+def cmd_lens(args):
+    from . import lens as L
+    from .waterfall import read
+    rec = read(args.path)
+    existing = rec.lens
+    if existing is not None and not args.replace:
+        r = existing.summary()
+        r["lens_kind"] = r.pop("kind")
+        r["kind"] = "lens"
+        r["path"] = str(L.fileformat.paths(rec.meta_path)[0])
+        r["recording"] = str(rec.meta_path)
+        r["model"] = rec.model
+        r["already"] = True
+        args.record = False
+        data = existing
+    else:
+        last = {"stage": None}
+
+        def progress(done, total, stage):
+            if args.json:
+                return
+            if stage != last["stage"]:
+                last["stage"] = stage
+                print(("decoding the output matrix" if stage == "unembedding" else "reading the layers")
+                      + f" ({total:,} {'rows' if stage == 'unembedding' else 'steps'})…",
+                      file=sys.stderr, flush=True)
+        r = L.run(rec, model_path=args.model, k=args.k, layers=args.layers, replace=args.replace,
+                  progress=progress)
+        rec._lens = False                      # re-read the track just written
+        data = rec.lens
+    n_show = args.show
+    if n_show and data is not None:
+        depth = data.depth
+        r["tokens"] = [{"step": i, "piece": rec.piece(int(rec.steps[i]["chosen"])),
+                        "depth": int(depth[i])} for i in range(min(n_show, rec.n_steps))]
+    if args.step is not None and data is not None:
+        if not 0 <= args.step < rec.n_steps:
+            raise ValueError(f"step {args.step} is outside 0–{rec.n_steps - 1}")
+        st = rec.chosen(args.step)
+        fav = int(rec.steps[args.step]["ids"][0])
+        import math
+        st["favourite"] = rec.piece(fav)
+        st["favourite_p"] = math.exp(float(rec.steps[args.step]["logprobs"][0]))
+        r["step"] = st
+        # a lens made before the pieces were stored, or a token outside them:
+        # look the text up in the model file, if it is there
+        ids = set(data.records[args.step]["ids"].reshape(-1).tolist()) - {-1}
+        missing = {t for t in ids if data.piece(t, rec.piece) == f"<{t}>"}
+        if missing:
+            from .lens.pieces import resolve
+            found, _how = resolve(args.model or rec.model.get("path"), missing)
+            data.add_pieces(found)
+        r["column"] = data.column(args.step, piece=rec.piece, n=args.top)
+    _out(args, r, _human_lens)
+    return EXIT_OK
+
+
 # ---------------------------------------------------------------- parser
 def build_parser() -> argparse.ArgumentParser:
     # NOTE: never set_defaults(record=...) on a subparser — the parent's
@@ -582,7 +777,8 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--pretty", action="store_true", help="indent the JSON")
     common.add_argument("--no-record", dest="record", action="store_false",
                         help="do not write this run to the notebook")
-    common.add_argument("--data", help="data folder (default: ATHANOR_DATA or the per-user folder)")
+    common.add_argument("--data", help="data folder (default: ATHANOR_DATA; else <checkout>/data "
+                                       "when run from a source checkout; 'athanor data' says which)")
 
     p = argparse.ArgumentParser(prog="athanor", description="Take a language model apart and "
                                 "measure it. Every number says how it was made.")
@@ -594,6 +790,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("capabilities", parents=[common],
                        help="what the installed llama.cpp binding can do")
     s.set_defaults(func=cmd_capabilities)
+
+    s = sub.add_parser("data", parents=[common],
+                       help="where Athanor writes (recordings, lenses, notebook, log), and why")
+    s.set_defaults(func=cmd_data)
 
     s = sub.add_parser("inspect", parents=[common], help="a file's anatomy and tokenizer health")
     s.add_argument("model")
@@ -675,6 +875,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--tap", action="append",
                    help="also record the model's insides: 'experts', 'residual', 'logits', or "
                         "tensor-name patterns such as 'l_out-*' (repeatable)")
+    s.add_argument("--lens", action="store_true",
+                   help="record the residual stream and run the logit lens on it afterwards "
+                        "(athanor lens)")
+    s.add_argument("--lens-k", type=int, default=8, help="candidates kept per layer by --lens")
     s.set_defaults(func=cmd_record)
 
     s = sub.add_parser("tap", parents=[common],
@@ -699,6 +903,20 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("recordings", parents=[common], help="list Waterfall recordings")
     s.add_argument("folder", nargs="?", help="default: <data>/recordings")
     s.set_defaults(func=cmd_recordings)
+
+    s = sub.add_parser("lens", parents=[common],
+                       help="the logit lens (M1/M30): read every recorded layer as the words it "
+                            "would say, and each token's decision depth")
+    s.add_argument("path", help="a recording made with --tap residual (.athrec-meta or stem)")
+    s.add_argument("--model", help="the model file, if it has moved since the recording")
+    s.add_argument("--k", type=int, default=8, help="candidates kept per layer (default 8)")
+    s.add_argument("--layers", help="only these layers, e.g. 0-11 or 3,7,20-23 (default: all)")
+    s.add_argument("--replace", action="store_true", help="redo a lens that already exists")
+    s.add_argument("--show", type=int, default=120,
+                   help="print the first N tokens with their depth (default 120; 0 for none)")
+    s.add_argument("--step", type=int, help="show what every layer would say at this step")
+    s.add_argument("--top", type=int, default=3, help="candidates per layer with --step")
+    s.set_defaults(func=cmd_lens)
     return p
 
 
@@ -763,6 +981,7 @@ def main(argv=None) -> int:
     if args.command == "notebook" and args.action in ("show", "note") and not args.id:
         parser.error(f"notebook {args.action} needs a run id")
     from .gguf import GGUFError
+    from .lens import LensUnavailable
     from .util import versions
     from .vocab import LlamaUnavailable, ModelLoadError
     from .tap import TapUnavailable
@@ -786,8 +1005,11 @@ def main(argv=None) -> int:
 
     try:
         code = args.func(args)
-    except (FileNotFoundError, IsADirectoryError, GGUFError, RecordingError) as exc:
+    except (FileNotFoundError, IsADirectoryError, GGUFError, RecordingError,
+            LensUnavailable) as exc:
         code = fail(exc, EXIT_INPUT, "cli-input-error")
+    except FileExistsError as exc:
+        code = fail(exc, EXIT_USAGE, "cli-usage-error")
     except (LlamaUnavailable, RecorderUnavailable, TapUnavailable) as exc:
         code = fail(exc, EXIT_LLAMA, "cli-no-llama")
     except ModelLoadError as exc:

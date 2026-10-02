@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "athanor"
 dynamic = ["version"]
-description = "Take a language model apart and measure it: GGUF files, their tokenizers and chat templates, a recorded waterfall of every token it chooses, and a tap on its insides (the expert map, the residual stream) — through llama.cpp itself."
+description = "Take a language model apart and measure it: GGUF files, their tokenizers and chat templates, a recorded waterfall of every token it chooses, and a tap on its insides (the expert map, the residual stream) and a lens that reads every layer as the words it would say — through llama.cpp itself."
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
@@ -26,8 +26,9 @@ dependencies = [
 # CPU-only binding from PyPI — and would REPLACE a CUDA build you compiled
 # yourself. If you have one, do not install the extra. docs/INTEGRATING.md §2.
 llama = ["llama-cpp-python>=0.3.16"]
-# gguf-py (llama.cpp's own, MIT): decodes K-quant and i-quant rows for
-# Compare's lineage check. Everything else works without it.
+# gguf-py (llama.cpp's own, MIT): decodes the i-quant and other exotic row types
+# (Q4_K/Q5_K/Q6_K, Q4_0/1, Q5_0/1, Q8_0, F16, BF16 are decoded by Athanor itself).
+# Everything else works without it.
 quants = ["gguf>=0.10"]
 # The Qt widgets (athanor.gui): the Waterfall player. The engine never needs it.
 gui = ["PySide6>=6.5"]

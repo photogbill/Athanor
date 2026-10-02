@@ -15,7 +15,7 @@ Lab workspace, but nothing in Athanor needs ATK.
 for days so that long, patient work could go on inside it. Named by Bill and
 Claude together, 2026-09-27.*
 
-## Status — 0.3: the file, the Waterfall, and the Tap
+## Status — 0.4: the file, the Waterfall, the Tap, and the lens
 
 **The Waterfall** records every token a model writes, with everything it
 was choosing between at that moment, and plays it back: the reply along
@@ -31,8 +31,18 @@ layer's output, the final norm, the logits. It reads and never writes;
 `athanor tap probe` checks, on your machine and your card, that it
 changes nothing and what it costs.
 
+**The lens** reads a recording's residual stream layer by layer: each
+layer's output through the model's own final norm and output matrix —
+what the model would say if it stopped there (the logit lens). From it,
+every token's **decision depth**: the first layer from which the model's
+eventual answer stays its answer all the way up. It checks itself against
+the recording's own logits at the top layer, and says MEASURED only when
+they agree.
+
 ```text
 python -m athanor record my-model.gguf --prompt "Describe the relay plan." --tap experts
+python -m athanor record my-model.gguf --prompt "Describe the relay plan." --lens
+python -m athanor lens <that recording>.athrec-meta --step 12
 python -m athanor tap probe my-model.gguf
 python -m athanor.gui
 ```
@@ -62,14 +72,16 @@ python -m athanor template chatml --model my-model.gguf
 Five minutes: [docs/QUICKSTART.md](docs/QUICKSTART.md). Using it from your
 own program: [docs/INTEGRATING.md](docs/INTEGRATING.md).
 
-## Next: branching, and depth
+## Next: the picture, branching, and the calibrated lens
 
 The Waterfall is an RF waterfall pointed at a model: time down the screen,
 the candidates across, colour for probability, a reply you can scrub like
-an I/Q capture. Next, rewinding to any token and branching down a road the
-model didn't take, and stacking several answers to the same question to
-watch where they part. With the Tap, the logit lens at every step: the
-layer at which each token was decided.
+an I/Q capture. The lens gives it a third axis — depth — and the next
+step is drawing it: the grid of layers × tokens in the player, a depth
+trace under the Waterfall, and the column at the cursor. Then rewinding to
+any token and branching down a road the model didn't take, stacking
+several answers to the same question to watch where they part, and the
+calibrated (tuned) lens so the early layers read as well as the late ones.
 
 ## The rules it keeps
 
@@ -82,7 +94,9 @@ layer at which each token was decided.
 - **Held to llama.cpp.** Tokenizers are llama.cpp's own, never
   re-implemented. The 55 chat templates match llama.cpp's C++ byte for byte.
 - **Offline and local.** Nothing is downloaded, nothing is uploaded, no
-  telemetry. Results stay on your disk.
+  telemetry. Results stay on your disk — beside the code when Athanor runs
+  from a checkout, in the host's folder inside a host, where `ATHANOR_DATA`
+  says otherwise; `athanor data` tells you which.
 - **Nothing ships with a model.** Bring your own GGUF files. The tests use
   three of llama.cpp's vocabulary-only files, which contain no weights.
 
@@ -98,6 +112,7 @@ athanor/          the engine (no Qt, no ATK)
   tabs/           Inspect, Tokenize, Compare, Template
   waterfall/      the recorder, the recording format, reading it back
   tap/            the Tap: ggml read from Python, and the probe
+  lens/           the lens: the unembedding (decoded once, cached), the pass, the track
   gui/            the Qt widgets: the player, the expert map (optional)
   notebook.py     the record
   log.py          what happened, kept to learn from

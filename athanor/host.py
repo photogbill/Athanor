@@ -37,18 +37,47 @@ class Host(Protocol):
     def settings(self) -> dict: ...
 
 
-def default_data_dir() -> Path:
-    """``ATHANOR_DATA`` if set; else the per-user data folder."""
+def source_checkout() -> Path | None:
+    """The folder Athanor runs from when it is a source checkout (or an
+    editable install of one): ``pyproject.toml`` beside the ``athanor``
+    package. None when it is installed into site-packages."""
+    root = Path(__file__).resolve().parent.parent
+    if (root / "pyproject.toml").is_file() and (root / "athanor" / "__init__.py").is_file():
+        return root
+    return None
+
+
+def data_dir_choice() -> tuple[Path, str]:
+    """(the data folder, how it was chosen) — the rule behind ``default_data_dir``:
+
+    1. ``ATHANOR_DATA`` (or ``--data`` on the command line), when set;
+    2. ``<checkout>/data`` when Athanor runs from a source checkout — its
+       data stays beside its code, on the drive the code lives on, never
+       in a Windows user profile it was not told about (Bill, 2026-10-02);
+    3. otherwise the per-user data folder of the platform
+       (``%LOCALAPPDATA%\\Athanor``, ``~/Library/Application Support/Athanor``,
+       ``$XDG_DATA_HOME/athanor``).
+
+    A host application replaces all of this with its own ``data_dir``."""
     env = os.environ.get("ATHANOR_DATA")
     if env:
-        return Path(env)
+        return Path(env), "ATHANOR_DATA"
+    checkout = source_checkout()
+    if checkout is not None:
+        return checkout / "data", "checkout"
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-        return Path(base) / "Athanor"
+        return Path(base) / "Athanor", "per-user"
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / "Athanor"
+        return Path.home() / "Library" / "Application Support" / "Athanor", "per-user"
     base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-    return Path(base) / "athanor"
+    return Path(base) / "athanor", "per-user"
+
+
+def default_data_dir() -> Path:
+    """``ATHANOR_DATA`` if set; else ``<checkout>/data`` when running from a
+    source checkout; else the per-user data folder (``data_dir_choice``)."""
+    return data_dir_choice()[0]
 
 
 class NullHost:

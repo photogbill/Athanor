@@ -479,6 +479,59 @@ computing the graph in pieces can stop the backend fusing some kernels,
 which may change the last bits; the probe is how to find out.
 `athanor tap probe MODEL` runs it from the command line.
 
+### Read every layer: the lens
+
+A recording made with the residual stream (`tap="residual"`: each layer's
+output, `l_out-N`) can be read layer by layer after the fact. The **lens**
+puts every layer's vector through the model's own final norm and output
+matrix — the two steps the model itself takes at the top — and keeps what
+each layer "would say" at every token: the logit lens (M1), and from it
+each token's **decision depth**, the first layer from which the model's
+eventual favourite is already the answer at every layer above (M30).
+
+```python
+# needs: llama, and the model file once (to decode its output matrix)
+import llama_cpp
+from athanor import api, tap
+
+llm = llama_cpp.Llama(RUNNABLE_MODEL, n_ctx=512, verbose=False)
+tap.make_tappable(llm)
+with api.attach_recorder(llm, tap="residual") as rec:
+    llm.create_chat_completion([{"role": "user", "content": "Describe the relay plan."}],
+                               max_tokens=64)
+path = rec.save(DATA_DIR / "recordings")
+
+summary = api.run_lens(path)               # writes <stem>.athrec-lens beside the recording
+print(summary["label"], summary["check"]["favourite_agreement"])
+r = api.read_recording(path)
+r.lens.depth                               # a layer number per token (-1: undecided)
+r.lens.fav_logprob                         # [tokens, layers]: the picture, time down, depth across
+r.lens.column(step=3, piece=r.piece)       # what every layer would say at one step
+r.lens.agreement_by_layer()                # how far each layer can be read with the plain lens
+```
+
+* The output matrix is decoded from the GGUF once — Q4_K, Q5_K, Q6_K, Q8_0,
+  Q4_0/1, Q5_0/1, F16, BF16 and F32 without any extra package; other types
+  through gguf-py when it is installed — and kept as float32 under
+  `<data>/lenses/<fingerprint>/` (about 1.2 GB for a 152k × 2,048 matrix,
+  2.7 GB for 131k × 5,120). The second lens on a model costs no decoding.
+  `api.build_unembedding(model_path)` builds it ahead of time.
+* The pass is numpy on the CPU (one matmul of all layers against the whole
+  vocabulary per token); it never loads llama.cpp and can run while a host's
+  model stays on the card. Tens of milliseconds a token on a 30B-class
+  model, so a reply of a few hundred tokens takes seconds to a minute.
+* **It checks itself.** At every step the last layer's reading is compared
+  with the recording's own logits; the result is MEASURED only when the
+  favourite agrees at 98 % of steps or more, EXPERIMENTAL otherwise, with
+  the numbers in `summary["check"]` either way. `LensUnavailable` says
+  why a lens cannot be run (no residual in the recording, the model file
+  gone — name it with `model_path=` — a final norm this lens does not know).
+* The lens files are derived and never change the recording;
+  `api.run_lens(path, replace=True)` redoes them. The format is in
+  `docs/formats/recording.md`.
+* A recording of a model whose experts live in RAM and attention on the
+  card (how a 30B-A3B fits in 16 GB) records and reads exactly the same way.
+
 ## 4. The command line, with `--json`
 
 Every command prints a readable report. With `--json` it prints the same
@@ -488,6 +541,7 @@ parse the output.
 | command | what |
 |---|---|
 | `athanor capabilities` | what the installed llama.cpp binding can do |
+| `athanor data` | where Athanor writes (recordings, lenses, notebook, log), and which rule chose it |
 | `athanor inspect MODEL [--projector MMPROJ] [--no-llama] [--metadata] [--full-hash] [--strict]` | Inspect |
 | `athanor tokenize MODEL… (--text T \| --file F) [--context N]` | the context ruler |
 | `athanor splits MODEL… [--strings-file F]` | worst-split strings |
@@ -496,9 +550,10 @@ parse the output.
 | `athanor template [SPEC] [--model M] [--vs SPEC2] [--conversation FILE] [--no-gen] [--list] [--strict]` | Template |
 | `athanor roundtrip MODEL [--whole]` | does Athanor's writer reproduce this file? |
 | `athanor notebook list\|show ID\|note ID TEXT\|where` | the record |
-| `athanor record MODEL (--prompt T [--system S] \| --messages FILE \| --raw --prompt T) [--max-tokens N] [--temperature T] [--top-k/--top-p/--min-p/--repeat-penalty] [--seed N] [--n-ctx N] [--gpu-layers N] [--k N] [--out DIR] [--tap experts\|residual\|logits\|PATTERN]…` | the Waterfall: generate once, recorded (with the Tap, if asked) |
+| `athanor record MODEL (--prompt T [--system S] \| --messages FILE \| --raw --prompt T) [--max-tokens N] [--temperature T] [--top-k/--top-p/--min-p/--repeat-penalty] [--seed N] [--n-ctx N] [--gpu-layers N] [--k N] [--out DIR] [--tap experts\|residual\|logits\|PATTERN]… [--lens [--lens-k N]]` | the Waterfall: generate once, recorded (with the Tap, if asked; `--lens` records the residual and runs the lens on it) |
 | `athanor tap probe MODEL [--tokens N] [--n-ctx N] [--gpu-layers N]` | the Tap on this machine: does it change anything, does it read the truth, what does it cost |
 | `athanor tap names MODEL` | every tensor one forward pass computes — what the Tap can read |
+| `athanor lens RECORDING [--model M] [--k N] [--layers 0-11,20] [--replace] [--show N] [--step N [--top N]]` | the logit lens over a residual recording: decision depth per token, how far each layer reads, what every layer would say at one step |
 | `athanor recording PATH [--step N] [--top N] [--forks N] [--verify]` | read a recording: the text, where the favourite was not taken, one step's candidates |
 | `athanor recordings [FOLDER]` | list recordings |
 | `athanor version` | versions |
@@ -582,9 +637,15 @@ api.set_host(api.NullHost())               # back to standalone
 ```
 
 `set_host` checks the shape and names any missing method. `NullHost` is the
-default. It uses `ATHANOR_DATA` (or the per-user data folder:
-`%LOCALAPPDATA%\Athanor` on Windows, `~/.local/share/athanor` on Linux) and
-`ATHANOR_MODELS` (folders, separated by `os.pathsep`).
+default. Its data folder is, in order: `ATHANOR_DATA` (or `--data`) when
+set; `<checkout>/data` when Athanor runs from a source checkout or an
+editable install of one — its data stays beside its code, on the drive the
+code lives on, never in a user profile it was not told about; and only for
+a package installed into site-packages that was told nothing, the
+platform's per-user folder (`%LOCALAPPDATA%\Athanor` on Windows,
+`~/.local/share/athanor` on Linux). `athanor data` prints the folder and
+which rule chose it. Models come from `ATHANOR_MODELS` (folders, separated
+by `os.pathsep`).
 
 `borrow_gpu` is held around anything that loads weights: in 0.2, only
 `record_once` (and so `athanor record`). A host that records its own

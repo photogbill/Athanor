@@ -3,6 +3,67 @@
 Until 1.0, anything in the public API, the command line or the result
 formats may change. Every change is listed here.
 
+## 0.4.0 — 2026-10-02 — the lens (M1, M30)
+
+- **The lens** (`athanor.lens`, `api.run_lens`, `athanor lens RECORDING`):
+  a recording made with the residual stream (`--tap residual`) read layer
+  by layer — each layer's `l_out-N` through the model's own final norm and
+  output matrix, as a full distribution over the vocabulary: what the model
+  would say if it stopped at that layer (the logit lens, M1). Kept per step
+  and layer in a derived track beside the recording (`.athrec-lens` +
+  `.athrec-lens-meta`, `docs/formats/recording.md`): each layer's top-k,
+  the eventual favourite's and the chosen token's rank and log-probability
+  at every layer, the entropy; and per token the **decision depth** (M30) —
+  the first layer from which the favourite is the lens's answer at every
+  layer up to the top — and the first layer at which it appears among the
+  k. `Recording.lens` reads it (`depth`, `fav_logprob` [tokens, layers],
+  `column(step)`, `agreement_by_layer()`); `athanor recording` and the
+  listing say when a recording has one.
+- **It checks itself.** The last layer's reading is compared with the
+  recording's own logits at every step; the result is MEASURED when the
+  favourite agrees at ≥ 98 % of steps, EXPERIMENTAL otherwise, with the
+  agreement and the log-probability errors recorded either way. Proved on
+  llama.cpp's own tapped recordings of the test models (agreement 100 %,
+  errors ~1e-6).
+- **The unembedding** (`athanor.lens.unembed`, `api.build_unembedding`):
+  `output_norm` (RMS, or LayerNorm with its bias), its epsilon,
+  `output.weight` or the tied `token_embd.weight`, `output.bias` and
+  Gemma's logit soft-cap, from the GGUF; the matrix dequantized to float32
+  in row ranges and kept under `<data>/lenses/<header-sha256-prefix>-<size>/`,
+  memory-mapped on use. A damaged cache is rebuilt, not trusted. The model
+  file is needed once; a file that is not the recording's is refused unless
+  named (`--model`), and then noted.
+- **K-quants decoded natively** (`athanor.gguf.dequant`): Q4_K, Q5_K and
+  Q6_K — the type every K-quant file keeps its output matrix in — plus
+  Q5_0 and Q5_1, in numpy, following ggml's `dequantize_row_*` and tested
+  against a transcription of its loops; bit-identical to gguf-py's.
+  `dequantize_row_range` reads a run of rows in one piece.
+  `can_dequantize(type)` says whether a type needs gguf-py.
+- The lens meta carries the **text of every token the layers name** that the
+  recording's own pieces lack (`pieces`, looked up through llama.cpp's
+  tokenizer when the binding is present, else decoded from the file's
+  token list — `athanor.lens.pieces`), so a column reads as words, not ids;
+  `athanor lens --step` looks up anything still missing on the spot.
+- `athanor record --lens [--lens-k N]`: record with the residual stream
+  and run the lens on the recording straight after.
+- Recordings: `stems()` knows the lens suffixes; `Recording.summary()` and
+  `list_recordings` carry a `lens` entry.
+- Measured on Bill's card (2026-10-02, ATK, Qwen3-Coder-30B-A3B Q4_K_M, the
+  experts in RAM and attention on an RTX 3080 Ti): the Tap's experts preset
+  cost 9.4 ms a token (144 copies) on a reply at 19.1 tokens/s; 291 steps,
+  none flagged; the chosen experts were the router's top-8 at all 13,968
+  layer-steps.
+- **Where data goes.** Run from a source checkout (or an editable install
+  of one), Athanor now keeps its data in `<checkout>/data` — beside its
+  code, on the code's drive — instead of the platform's per-user folder,
+  which on Windows put recordings under `C:\Users\…\AppData` unasked
+  (2026-10-02). `ATHANOR_DATA` / `--data` still come first; a host's
+  `data_dir` still replaces all of it; only a package installed into
+  site-packages that was told nothing falls back to the per-user folder.
+  `athanor data` prints the folder and which rule chose it;
+  `host.data_dir_choice()` is the rule.
+- `API_VERSION` 0.3.
+
 ## 0.3.0 — 2026-09-29 — the Tap (spike S1)
 
 - **The Tap** (`athanor.tap`, `api.make_tappable`): a model's own tensors,

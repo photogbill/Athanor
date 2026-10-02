@@ -1,13 +1,15 @@
-# Recordings — `.athrec-meta` + `.athrec-data` (+ `.athrec-tap`)
+# Recordings — `.athrec-meta` + `.athrec-data` (+ `.athrec-tap`, + `.athrec-lens`)
 
 A Waterfall recording is what a model was choosing from at every token it
-wrote. It is two files with the same stem, and a third when the Tap
-recorded the model's insides too:
+wrote. It is two files with the same stem, a third when the Tap recorded
+the model's insides too, and two more when the lens has been run on it:
 
 ```text
-20260928-221530-Magistral-Small-2509-Q4_K_M-3fa9c1.athrec-meta   JSON, UTF-8
-20260928-221530-Magistral-Small-2509-Q4_K_M-3fa9c1.athrec-data   binary
-20260928-221530-Magistral-Small-2509-Q4_K_M-3fa9c1.athrec-tap    binary, optional
+20260928-221530-Magistral-Small-2509-Q4_K_M-3fa9c1.athrec-meta        JSON, UTF-8
+20260928-221530-Magistral-Small-2509-Q4_K_M-3fa9c1.athrec-data        binary
+20260928-221530-Magistral-Small-2509-Q4_K_M-3fa9c1.athrec-tap         binary, optional
+20260928-221530-Magistral-Small-2509-Q4_K_M-3fa9c1.athrec-lens-meta   JSON, derived
+20260928-221530-Magistral-Small-2509-Q4_K_M-3fa9c1.athrec-lens        binary, derived
 ```
 
 The layout follows SigMF's (a JSON description beside a binary file, with
@@ -210,10 +212,117 @@ tap["ffn_moe_topk-3"]          # [steps, experts used]: the experts layer 3 chos
 * A reader that does not know the Tap ignores the `tap` key and the file,
   as with any unknown key. The meta file is written after the Tap file.
 
+## `.athrec-lens` + `.athrec-lens-meta` — the lens (derived)
+
+When a recording carries the residual stream (`--tap residual`: `l_out-N`
+for every layer), `athanor lens` reads each layer's output through the
+model's own final norm and output matrix and writes what each layer "would
+say" at every step — the logit lens (M1), and from it each token's
+**decision depth** (M30). These two files are **derived**: computed after
+the fact from the Tap's rows and the model file, recomputable with another
+`k` or a calibrated lens (`--replace`), and the recording's own files are
+never changed by them. They have their own meta file so the recording's
+stays exactly as it was written.
+
+`.athrec-lens-meta`:
+
+```text
+{
+  "format": "athlens", "version": 1,
+  "kind": "logit",                          "tuned" once the calibrated lens exists
+  "recording": "<stem>.athrec-meta",
+  "k": 8,                                   candidates kept per layer
+  "layers": [0, 1, …, 47],                  the l_out layers read, in record order
+  "n_layer": 48,                            the model's layer count (from the Tap's facts)
+  "n_steps": 291, "n_vocab": 151936,
+  "record_bytes": 4052,                     20 + L·(8·k + 20)
+  "layout": "flags:uint32 depth:int32 …",   the table below, as one line
+  "flags": {"1": "…", "2": "…"},
+  "depth_rule": "…",                        how depth, first_seen and chosen_depth are defined
+  "how": "…",
+  "label": "MEASURED" | "EXPERIMENTAL",     MEASURED only when the check below passes
+  "check": {                                the last layer's lens against the recording's logits
+    "made": true, "steps_compared": 291,
+    "favourite_agrees": 291, "favourite_agreement": 1.0,
+    "candidates_compared": 4656,
+    "max_abs_logprob_error": 0.012, "mean_abs_logprob_error": 0.003,
+    "agreement_floor": 0.98, "reproduces": true, "how": "…"
+  },
+  "by_layer": {"agreement": [L], "fav_logprob_mean": [L], "entropy_mean": [L]},
+  "unembedding": {fingerprint, n_vocab, n_embd, output: {tensor, type, tied, softcap, bias},
+                  norm: {kind, eps, tensor, bias}, cache, decode_seconds},
+  "model": {…},                             the recording's model block
+  "pieces": {"<id>": "<text>", …},         the text of every token the layers name that the
+                                            recording's own pieces do not hold
+  "pieces_from": "llama.cpp" | "the file's token list",
+  "seconds": 14.2, "ms_per_step": 49,
+  "created": "…", "athanor": "0.4.0", "versions": {…},
+  "notes": ["…"],
+  "file": "<stem>.athrec-lens", "bytes": …, "sha256": "…"
+}
+```
+
+`.athrec-lens`: `n_steps` records, aligned with `.athrec-data`, each
+little-endian, no padding, with `L = len(layers)`:
+
+| offset | type | field | meaning |
+|---|---|---|---|
+| 0 | uint32 | `flags` | 1: no residual at this step (the Tap had nothing); 2: the last layer's lens does not name the recording's favourite here |
+| 4 | int32 | `depth` | decision depth: the first layer (an INDEX into `layers`) from which the recording's favourite is the lens's top token at every layer up to the last; −1 when the last layer itself disagrees |
+| 8 | int32 | `first_seen` | the first layer (index) at which the favourite is within the lens's k; −1 if never |
+| 12 | int32 | `fav` | the recording's favourite at this step (its `ids[0]`) |
+| 16 | int32 | `chosen_depth` | as `depth`, for the token the sampler took |
+| 20 | int32[L][k] | `ids` | each layer's k likeliest tokens, best first (ties by the lower id) |
+| 20+4Lk | float32[L][k] | `logprobs` | their log-probabilities at that layer, nats (a full softmax over the vocabulary at that layer) |
+| 20+8Lk | int32[L] | `fav_rank` | the favourite's rank at each layer (0 = that layer's top token) |
+| +4L | float32[L] | `fav_logprob` | its log-probability at each layer |
+| +4L | int32[L] | `chosen_rank` | the chosen token's rank at each layer |
+| +4L | float32[L] | `chosen_logprob` | |
+| +4L | float32[L] | `entropy` | of the layer's whole distribution, nats |
+
+A step with flag 1 holds −1 in every integer field and NaN in every float.
+
+```text
+L, k = len(meta["layers"]), meta["k"]
+dt = np.dtype([("flags","<u4"),("depth","<i4"),("first_seen","<i4"),("fav","<i4"),
+               ("chosen_depth","<i4"),("ids","<i4",(L,k)),("logprobs","<f4",(L,k)),
+               ("fav_rank","<i4",(L,)),("fav_logprob","<f4",(L,)),("chosen_rank","<i4",(L,)),
+               ("chosen_logprob","<f4",(L,)),("entropy","<f4",(L,))])
+lens = np.fromfile("….athrec-lens", dtype=dt)
+lens["fav_logprob"]            # [steps, layers]: the picture — time down, depth across
+np.array(meta["layers"])[lens["depth"]]   # decision depth as layer numbers (where depth >= 0)
+```
+
+* **What the lens is.** Each `l_out-N` row (float32, as the Tap copied it)
+  through the final norm — RMS for Llama-style models, LayerNorm with its
+  bias for GPT-2-style ones — and the output matrix (`output.weight`, or
+  `token_embd.weight` when tied) dequantized to float32 by Athanor, plus
+  `output.bias` and Gemma's logit soft-cap when the file has them. The
+  decoded matrix is kept under `<data>/lenses/<header-sha256-prefix>-<size>/`
+  and reused.
+* **The check.** At every step the last recorded layer's reading is compared
+  with the recording's own logits: its top token must be the recording's
+  favourite, and its log-probabilities over the recording's top candidates
+  are compared. `label` is MEASURED when the favourite agrees at 98 % of
+  steps or more, EXPERIMENTAL otherwise (a norm or architecture this lens
+  does not know, or a recording without the last layer) — with the numbers
+  either way. On a quantized model run on a GPU the log-probabilities differ
+  a little from llama.cpp's (its kernels quantize the activations for the
+  output matmul; Athanor's numpy does not): a small `max_abs_logprob_error`
+  with full agreement is the expected picture.
+* **Its limit.** A lens shows what can be read out of a layer in the
+  output's own terms, not that the model "thinks in" those words there; the
+  plain lens reads early layers poorly, which `by_layer.agreement` shows
+  per layer.
+* `depth`, `first_seen` and `chosen_depth` are indices into `layers`, not
+  layer numbers, so a lens over a subset of layers (`--layers`) reads the
+  same way. `athanor.lens.LensData` returns them as layer numbers.
+
 ## Reading
 
 * Check `athrec:version`. A reader for version 1 refuses anything else.
 * Check the data file's size: `n_steps × step_bytes`. Check
   `athrec:data_sha256` when you want to be sure. The same for the Tap file:
-  `tap.n_steps × tap.record_bytes`, and `tap.sha256`.
+  `tap.n_steps × tap.record_bytes`, and `tap.sha256`; and for the lens file,
+  `n_steps × record_bytes` and `sha256` from its own meta file.
 * Unknown keys may appear in any version; ignore them.

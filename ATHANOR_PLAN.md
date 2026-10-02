@@ -781,6 +781,18 @@ comes from.*
   **Not yet:** attention maps (need flash attention off and per-head
   tensors), the residual stream in ATK's recordings (800 KB a token on a
   24B — the Tap can, ATK does not offer it until M30 has a view for it).
+  **Measured on Bill's card (2026-10-02, the first run in ATK; the probe
+  itself still to be run):** Qwen3-Coder-30B-A3B-Instruct Q4_K_M, llama.cpp
+  with `token_embd` and all 144 expert tensors in RAM, attention, routers
+  and norms on the RTX 3080 Ti; 291 tokens at 19.1 tokens/s. The experts
+  preset (144 copies a token) cost **9.4 ms a token** — about 18 % — and
+  the recorder 1.6 ms; no step flagged; router probabilities summed to 1 at
+  every layer-step; the chosen 8 were the router's top-8 at all 13,968
+  layer-steps (the probe's MoE check holds on CUDA). Note for the expert
+  map: `ffn_moe_weights` is the router's score of the chosen experts BEFORE
+  normalising (they summed to 0.13–0.78); Qwen3-MoE normalises them before
+  mixing, which `share()` does for the display. Still open from the probe:
+  exactness plain vs tapped on CUDA, and the idle cost.
 - **The Wheel.** `llama_set_adapter_cvec` adds a vector to the residual
   stream across a range of layers — a control vector. In the pinned binding.
 - **Surgery (S2 + S5).** A GGUF writer, and llama.cpp's own `llama-quantize`
@@ -808,6 +820,26 @@ network. The single most striking picture of what a transformer does.
 *Needs:* the Tap; the output matrix dequantized (a few GB of RAM for an 8B —
 64 GB is plenty). Small models first. *From:* nostalgebraist's "logit lens"
 (2020); the "tuned lens", Belrose et al. (2023).
+**The engine BUILT 2026-10-02 (0.4.0), `athanor/lens/`; the picture next.**
+`athanor record … --lens` / `athanor lens RECORDING`: every recorded
+`l_out-N` through the file's own `output_norm` and `output.weight`
+(Q4_K/Q5_K/Q6_K and the rest decoded natively, no new dependency; the
+matrix kept as float32 under `<data>/lenses/<fingerprint>/` and
+memory-mapped — 1.2 GB for the 30B-A3B's 152k × 2,048), as a full
+distribution per layer per token: each layer's top-k, the favourite's and
+the chosen token's rank and log-probability at every layer, the entropy,
+in a derived `.athrec-lens` track beside the recording (its own meta
+file; the recording is never changed). It checks itself at every step —
+the last layer's reading against the recording's own logits — and is
+MEASURED only when the favourite agrees at ≥ 98 % of steps; proved on
+llama.cpp's tapped recordings of the test models (100 %, ~1e-6). A
+post-pass on the CPU: ~0.25 s a token on two cores at the 30B's size,
+so tens of milliseconds on Bill's fourteen. **Not yet:** the grid in the
+player (layers × tokens, the depth trace, the column at the cursor), the
+residual box in ATK's Lab (one setting beside the experts box;
+`attach(tap=("experts", "residual"))`), the lens over the PROMPT's tokens
+(`rows="all"`), per-layer attribution (the residual's deltas, attention
+vs MLP), and the calibrated lens (M30's button).
 
 ### M2 · The steering wheel
 Build a direction from contrasting examples — formal vs casual, English vs
@@ -1376,6 +1408,20 @@ beside the Waterfall, and a finding across a reply: which kinds of words
 needed the whole network (names, numbers, the turn in an argument), and
 whether the moments of doubt are the deep ones. Cheap — it is M1's grid,
 reduced to one number per token. *Needs:* the Tap, M1.
+**The number BUILT 2026-10-02 (0.4.0), in the lens track.** Defined
+exactly: `depth` is the first layer from which the recording's favourite
+(its `ids[0]`) is the lens's top token at every layer up to the last; −1
+when the last layer itself disagrees (flagged). Beside it `first_seen`
+(the first layer at which the favourite is within the lens's k) and
+`chosen_depth` (the same for the token the sampler took — −1 when the
+sampler went off the favourite and no layer ever "decided" that token).
+`athanor lens` prints the histogram of depths, how far each layer reads
+(the share of tokens at which its answer is already the final favourite),
+and the reply with each token's depth. **Not yet:** the trace under the
+Waterfall; the live tier (depth read at record time from the final
+candidates' rows alone, nothing stored — a few million multiply-adds a
+token — once the probe says what the residual copy costs); the button
+below.
 
 **Calibrating the lens — one button** (designed 2026-09-29). Bill: *"Can we
 automate the refinement process for the tuned lens? So that after you load
@@ -1799,25 +1845,38 @@ the whole of "watching the inside". **Built 2026-09-29 with M28's expert
 map.** Next on it: the probe on Bill's card (the spike's last answer), then
 M30 (the logit lens, reduced — the lens is already proved against the
 logits by the probe; what remains is the output matrix dequantized in
-chunks, and the view), then M20's R0.
+chunks, and the view), then M20's R0. **2026-10-02: the Tap ran in ATK on
+the 30B-A3B (numbers above); M1's engine and M30's number are built
+(0.4.0, `athanor lens`) — the view remains.**
 
 **The Reader** (2026-09-29, §4) builds on the Tap: S7 first, then the
 Mirror (T1) as its first visible payoff; its order is in its own section.
 
 **Where to pick up** (parked 2026-09-29 while Bill works on other parts of
-ATK — *"I promise, we will revisit it"*), in order:
-1. **The probe on Bill's card** — the last step of S1. From the Athanor
-   folder: `..\ATK\envs\atk_core\Scripts\python.exe -m athanor tap probe
-   <model.gguf>`, once with a mixture-of-experts model (Mixtral,
-   Qwen3-30B-A3B) and once with a dense one (Magistral). It answers: does
-   computing the graph in pieces on CUDA change the last bits, what does the
-   Tap cost idle and copying, does the lens reproduce the logits there.
-   Bill pastes the output; the numbers go into the Tap section above.
-2. **S7 and the Mirror (T1)** — the write path proved, then "What was it
+ATK — *"I promise, we will revisit it"*; resumed 2026-10-02 with the Tap's
+first run in ATK and the lens engine), in order:
+1. **The probe on Bill's card** — the last step of S1, still to run. From
+   the Athanor folder: `..\ATK\envs\atk_core\Scripts\python.exe -m athanor
+   tap probe "D:\Analyst_Toolkit\Models\Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf"`,
+   and once with a dense one (Magistral). It answers: does computing the
+   graph in pieces on CUDA change the last bits, what does the Tap cost
+   idle and copying, does the lens reproduce the logits there. Bill pastes
+   the output; the numbers go into the Tap section above (the ATK run's
+   cost and MoE figures are already there).
+2. **The first real lens** — `athanor record <model> --prompt … --lens`
+   (or ATK's Lab once it has the residual box) on the 30B-A3B, then
+   `athanor lens <recording> --step N`: the first look at decision depth
+   on Bill's own model and question, and the agreement-by-layer curve that
+   says how badly the plain lens reads the early layers there — the
+   measured case for the Calibrate button.
+3. **The picture (M9)** in the player: the grid, the depth trace, the
+   column at the cursor; the residual box in ATK's Lab.
+4. **S7 and the Mirror (T1)** — the write path proved, then "What was it
    thinking here?" in the player.
-3. **M1/M30 and the Calibrate button** (Thorough by default, the Sweep) —
-   and T2(a) on the same machinery.
-4. Then the Reader in its own order (T6, T5, T4, T7/T8, T3, T9).
+5. **The Calibrate button** (Thorough by default, the Sweep) — and T2(a)
+   on the same machinery; per-layer attribution (what each layer ADDED,
+   attention vs MLP) on the same track.
+6. Then the Reader in its own order (T6, T5, T4, T7/T8, T3, T9).
 
 **Next, concretely, outside the Reader** (2026-09-29): Phase 1.1 (numbers, slack, variants, the
 integrity ledger) and the Phase 1 tabs' widgets in the Lab — Inspect,

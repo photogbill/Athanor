@@ -63,7 +63,24 @@ player the **expert map** sits under the candidates — the router's score
 for every expert at the cursor, the experts used framed; "one layer, over
 time" turns it into a second waterfall.
 
-**7. Look back.** Every run is in the notebook:
+**7. Read every layer.** Record the residual stream — each layer's output
+at every token — and read it through the model's own output matrix: at
+which layer was each token decided, and what would each layer have said?
+
+```text
+python -m athanor record my-model.gguf --prompt "Describe the relay plan." --lens
+python -m athanor lens <that recording>.athrec-meta --step 12
+```
+
+`--lens` records with `--tap residual` and runs the lens afterwards (the
+output matrix is decoded from the file once and kept). The report gives
+every token's **decision depth** — the first layer from which the model's
+eventual answer stays its answer — how far each layer can be read, and with
+`--step`, the whole column: what every layer would say at that token. The
+lens checks itself against the recording's own logits at the top layer
+and says MEASURED only when they agree.
+
+**8. Look back.** Every run is in the notebook:
 
 ```text
 python -m athanor notebook list

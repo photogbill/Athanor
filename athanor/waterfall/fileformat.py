@@ -42,6 +42,7 @@ FORMAT_VERSION = 1
 META_SUFFIX = ".athrec-meta"
 DATA_SUFFIX = ".athrec-data"
 TAP_SUFFIX = ".athrec-tap"      # optional: what the Tap copied, one record per step
+LENS_SUFFIXES = (".athrec-lens-meta", ".athrec-lens")   # derived: athanor.lens.fileformat
 HEADER_BYTES = 32
 DEFAULT_K = 256
 
@@ -72,7 +73,7 @@ def stems(path) -> tuple[Path, Path]:
     """(meta, data) paths for a recording named by any of its files or its stem."""
     p = Path(path)
     name = p.name
-    for suffix in (META_SUFFIX, DATA_SUFFIX, TAP_SUFFIX):
+    for suffix in (META_SUFFIX, DATA_SUFFIX, TAP_SUFFIX) + LENS_SUFFIXES:
         if name.endswith(suffix):
             base = name[: -len(suffix)]
             return p.with_name(base + META_SUFFIX), p.with_name(base + DATA_SUFFIX)

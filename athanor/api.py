@@ -47,8 +47,10 @@ from .testing import tiny_model
 from . import tap
 from .tap import TapUnavailable, make_tappable
 from .tap.probe import probe as tap_probe
+from . import lens
+from .lens import LensData, LensUnavailable, run as run_lens, build_unembedding
 
-API_VERSION = "0.2"
+API_VERSION = "0.3"
 
 __all__ = [
     "API_VERSION", "VERSION",
@@ -72,6 +74,8 @@ __all__ = [
     "recordings_folder",
     # the Tap
     "tap", "make_tappable", "tap_probe", "TapUnavailable",
+    # the lens (M1/M30): every layer read as logits, decision depth per token
+    "lens", "run_lens", "build_unembedding", "LensData", "LensUnavailable",
     # testing a host without downloading a model
     "tiny_model",
     # the record, and the log
@@ -88,6 +92,7 @@ _QUESTIONS = {
     "template": "What does the model actually see?",
     "template-compare": "How do these two templates differ?",
     "tap-probe": "Does the Tap work here, what does it cost, and does it change anything?",
+    "lens": "At which layer was each token decided, and what would each layer have said?",
 }
 
 

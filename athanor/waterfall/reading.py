@@ -174,6 +174,7 @@ class Recording:
         self.finish_reason = reply.get("finish_reason")
         self.pieces = {int(k): v for k, v in (meta.get("pieces") or {}).items()}
         self._tap = False              # not read yet
+        self._lens = False
         self._verify = False
 
     # ------------------------------------------------------------- shape
@@ -213,6 +214,16 @@ class Recording:
         when it recorded nothing."""
         t = self.meta.get("tap")
         return t if isinstance(t, dict) else None
+
+    @property
+    def lens(self):
+        """The lens track beside this recording (``athanor.lens.LensData``),
+        or None if the lens has not been run on it. Read on first use; a
+        damaged lens file raises RecordingError here."""
+        if self._lens is False:
+            from ..lens.reading import read as read_lens
+            self._lens = read_lens(self.meta_path, verify=self._verify)
+        return self._lens
 
     @property
     def title(self) -> str:
@@ -291,8 +302,21 @@ class Recording:
             "moments_of_doubt": int(len(self.doubts())),
             "error": self.error,
             "tap": _tap_summary(self.tap_info),
+            "lens": _lens_summary(self),
             "text": self.text,
         }
+
+
+def _lens_summary(rec) -> dict | None:
+    try:
+        lens = rec.lens
+    except Exception as exc:                      # a damaged lens file: say so, keep the summary
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    if lens is None:
+        return None
+    s = lens.summary()
+    return {"kind": s["kind"], "label": s["label"], "k": s["k"], "layers": len(s["layers"]),
+            "depth": s["depth"], "check": s["check"], "notes": s["notes"]}
 
 
 def _tap_summary(t: dict | None) -> dict | None:
@@ -335,7 +359,12 @@ def _listing_row(p: Path) -> dict:
         data_size = data.stat().st_size
     except OSError:
         data_size = None
-    key = (st.st_mtime_ns, st.st_size, data_size)
+    lens_meta = p.with_name(p.name[: -len(ff.META_SUFFIX)] + ff.LENS_SUFFIXES[0])
+    try:
+        lens_key = lens_meta.stat().st_mtime_ns
+    except OSError:
+        lens_key = None
+    key = (st.st_mtime_ns, st.st_size, data_size, lens_key)
     hit = _ROWS.get(str(p))
     if hit is not None and hit[0] == key:
         return dict(hit[1])
@@ -357,7 +386,8 @@ def _listing_row(p: Path) -> dict:
            "started": g.get("athrec:started"), "model": model.get("name"),
            "n_steps": g.get("athrec:n_steps"), "finish_reason": reply.get("finish_reason"),
            "preview": text[:160], "error": error,
-           "tap": sorted({s["kind"] for s in (tap or {}).get("layout") or []}) or None}
+           "tap": sorted({s["kind"] for s in (tap or {}).get("layout") or []}) or None,
+           "lens": lens_key is not None}
     _ROWS[str(p)] = (key, row)
     return dict(row)
 
@@ -376,6 +406,6 @@ def list_recordings(directory) -> list[dict]:
         except Exception as exc:
             out.append({"path": str(p), "created": None, "started": None, "model": None,
                         "n_steps": None, "finish_reason": None, "preview": "",
-                        "error": f"{type(exc).__name__}: {exc}", "tap": None})
+                        "error": f"{type(exc).__name__}: {exc}", "tap": None, "lens": None})
     out.sort(key=lambda r: (r.get("started") or r.get("created") or "", r["path"]), reverse=True)
     return out
