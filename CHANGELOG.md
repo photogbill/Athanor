@@ -44,6 +44,8 @@ formats may change. Every change is listed here.
   tokenizer when the binding is present, else decoded from the file's
   token list — `athanor.lens.pieces`), so a column reads as words, not ids;
   `athanor lens --step` looks up anything still missing on the spot.
+- The recordings list (the player's browser) marks each recording with what
+  it carries: `experts`, `layers`, `lens`.
 - `athanor record --lens [--lens-k N]`: record with the residual stream
   and run the lens on the recording straight after.
 - Recordings: `stems()` knows the lens suffixes; `Recording.summary()` and

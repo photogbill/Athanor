@@ -811,6 +811,22 @@ comes from.*
   experiment can branch, run, compare and discard without re-reading the
   prompt. It is the in-memory form of the Waterfall's saved branch points.
 
+- **S7 and S8 — for Palimpsest (2026-10-08).** Palimpsest's plan
+  (`D:\Analyst_Toolkit\Palimpsest\PALIMPSEST_PLAN.md`, Phase 0)
+  continues this series with two spikes that use the wing's instruments
+  and belong here as much as there:
+  - **S7 — gated deltas, by hand.** Qwen3-14B in HF transformers, 4-bit,
+    forward hooks; gated rank-1 deltas injected at the thought layer. Do
+    1,000 fire without damaging general ability? Does a summed background
+    shift behavior toward the memories' themes? About a week; decides
+    whether Palimpsest's weight-side memory is real (its Phase 5 bets).
+  - **S8 — write-side portability.** A control vector derived on one
+    model, mapped through a fitted linear map, applied to another on
+    stock llama.cpp (`llama_set_adapter_cvec`): does the same behavior
+    shift appear? Read-side fit says nothing about this. Two days.
+  Both report pass or fail with the numbers into Palimpsest's plan; the
+  Tap (S1) and the control-vector road of S6 are what they stand on.
+
 ### M1 · Watch it think — the logit lens
 Project every layer's hidden state through the model's final norm and output
 matrix and read off the token it "would say" at that depth. A grid —

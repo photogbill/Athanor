@@ -113,7 +113,16 @@ class RecordingsList(QWidget):
         self.heading.setToolTip(str(self.folder or ""))
         for r in rows:
             when = (r.get("started") or r.get("created") or "?")[:19].replace("T", " ")
-            first = f"{when}   {r.get('model') or '?'}   {r.get('n_steps') or 0} tokens"
+            tap = r.get("tap") or []
+            tags = []
+            if any(str(k).startswith("ffn_moe") for k in tap):
+                tags.append("experts")
+            if "l_out" in tap:
+                tags.append("layers")
+            if r.get("lens"):
+                tags.append("lens")
+            first = (f"{when}   {r.get('model') or '?'}   {r.get('n_steps') or 0} tokens"
+                     + (f"   · {' · '.join(tags)}" if tags else ""))
             second = ("⚠ " + r["error"]) if r.get("error") else (
                 r.get("preview") or "").replace("\n", " ")
             item = QListWidgetItem(f"{first}\n{second[:120]}")
