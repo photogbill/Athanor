@@ -725,7 +725,7 @@ comes from.*
   (`cb_eval` in the context parameters, what `examples/eval-callback`
   prints with): it asks "do you want this one?", computes up to the wanted
   tensors, and hands each over. From Python: a ctypes callback (one
-  dispatcher per context, idle until a Tap is set on it) and five ggml
+  dispatcher per context, idle until a Tap is set on it) and eight ggml
   functions bound from the binding's own `ggml-base` (`ggml_get_name`,
   `ggml_nbytes`, `ggml_backend_tensor_get`, and `ggml_init` /
   `ggml_new_tensor_4d` for a self-test that pins the start of

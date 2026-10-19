@@ -1,10 +1,11 @@
 """ggml from Python: just enough to copy a tensor out while llama.cpp computes it.
 
-llama-cpp-python loads ggml but binds none of its functions. The Tap needs
-five: a tensor's name, its size, a copy of its data (from whichever device
-holds it — ``ggml_backend_tensor_get`` reads CPU, CUDA, Vulkan or Metal
-memory alike), and ``ggml_init`` / ``ggml_new_tensor_4d`` / ``ggml_free``
-for a self-test. The library is the binding's own (``libggml-base`` beside
+llama-cpp-python loads ggml but binds none of its functions. The Tap binds
+eight: three to read a tensor — its name, its size and a copy of its data
+(from whichever device holds it — ``ggml_backend_tensor_get`` reads CPU,
+CUDA, Vulkan or Metal memory alike) — and five for the self-test at load
+(``ggml_init``, ``ggml_new_tensor_4d``, ``ggml_set_name``, ``ggml_get_data``
+and ``ggml_free``). The library is the binding's own (``libggml-base`` beside
 ``libllama``), so it is the one llama.cpp is already running.
 
 A tensor's shape and strides are read straight from its C struct

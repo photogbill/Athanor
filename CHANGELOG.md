@@ -72,8 +72,8 @@ formats may change. Every change is listed here.
   copied out while llama.cpp computes them — each layer's output
   (`l_out-N`), the final norm, the logits, and a mixture-of-experts model's
   routing (`ffn_moe_topk-N`, `ffn_moe_weights-N`, `ffn_moe_probs-N`). It
-  uses llama.cpp's evaluation callback (`cb_eval`) and five of ggml's
-  functions, bound here (the binding binds none); the start of
+  uses llama.cpp's evaluation callback (`cb_eval`) and eight of ggml's
+  functions (three to read tensors, five for the load-time self-test), bound here (the binding binds none); the start of
   `struct ggml_tensor` is read directly and checked by a self-test at load,
   so a ggml that moved a field turns the Tap off with a reason instead of
   reading the wrong bytes. `make_tappable` rebuilds a `Llama`'s context once
